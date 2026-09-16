@@ -738,6 +738,121 @@ describe("个人记账：多币种 + 汇率换算", () => {
   });
 });
 
+describe("个人记账：预算超支提醒（开发计划第一版暂缓功能之一）", () => {
+  test("设置预算后，本月花费超过预算会被标记为超支", () => {
+    store.setBudget("餐饮", 100);
+    store.addTransaction({ amount: 120, type: "expense", category: "餐饮", date: "2026-09-16" });
+    const [status] = store.getBudgetStatus("2026-09");
+    assert.equal(status.category, "餐饮");
+    assert.equal(status.spent, 120);
+    assert.equal(status.remaining, -20);
+    assert.equal(status.overspent, true);
+  });
+
+  test("没超支时 overspent 是 false，remaining 是正数", () => {
+    store.setBudget("交通", 300);
+    store.addTransaction({ amount: 60, type: "expense", category: "交通", date: "2026-09-16" });
+    const [status] = store.getBudgetStatus("2026-09");
+    assert.equal(status.overspent, false);
+    assert.equal(status.remaining, 240);
+  });
+
+    test("没设置预算的分类不会出现在超支提醒里", () => {
+    store.addTransaction({ amount: 500, type: "expense", category: "娱乐", date: "2026-09-16" });
+    assert.equal(store.getBudgetStatus("2026-09").length, 0);
+  });
+
+  test("只统计支出，不统计收入；只统计指定月份", () => {
+    store.setBudget("餐饮", 100);
+    store.addTransaction({ amount: 1000, type: "income", category: "餐饮", date: "2026-09-16" }); // 收入不计入
+    store.addTransaction({ amount: 50, type: "expense", category: "餐饮", date: "2026-08-16" }); // 上个月不计入
+    const [status] = store.getBudgetStatus("2026-09");
+    assert.equal(status.spent, 0);
+  });
+
+  test("清除预算（设为0或不传）后，这个分类就不再出现在超支提醒里", () => {
+    store.setBudget("餐饮", 100);
+    store.setBudget("餐饮", 0);
+    assert.equal(store.getBudgetStatus("2026-09").length, 0);
+    assert.deepEqual(store.getBudgets(), {});
+  });
+});
+
+describe("个人记账：收支图表（开发计划第一版暂缓功能之一）", () => {
+  test("listMonthlyTotals 按月汇总最近N个月的收入和支出", () => {
+    store.addTransaction({ amount: 3000, type: "income", category: "其他", date: "2026-09-01" });
+    store.addTransaction({ amount: 500, type: "expense", category: "餐饮", date: "2026-09-16" });
+    store.addTransaction({ amount: 200, type: "expense", category: "交通", date: "2026-07-10" });
+
+    const series = store.listMonthlyTotals(3, "2026-09"); // 2026-07, 08, 09
+    assert.equal(series.length, 3);
+    assert.equal(series[0].month, "2026-07");
+    assert.equal(series[0].expense, 200);
+    assert.equal(series[1].month, "2026-08");
+    assert.equal(series[1].income, 0);
+    assert.equal(series[1].expense, 0);
+    assert.equal(series[2].month, "2026-09");
+    assert.equal(series[2].income, 3000);
+    assert.equal(series[2].expense, 500);
+  });
+});
+
+describe("个人记账：多账户（开发计划第一版暂缓功能之一）", () => {
+  test("init() 会自动建一个默认账户，老数据（没有账户概念）的记账记录都会归到它名下", () => {
+    const accounts = store.listAccounts();
+    assert.equal(accounts.length, 1);
+    assert.equal(accounts[0].name, "默认账户");
+
+    const t = store.addTransaction({ amount: 50, type: "expense", category: "餐饮", date: "2026-09-16" });
+    assert.equal(t.accountId, accounts[0].id); // 没指定账户时自动记到默认账户
+  });
+
+  test("新增账户、记账到指定账户、账户余额正确计算（期初余额 + 收入 - 支出）", () => {
+    const account = store.addAccount({ name: "招商银行卡", initialBalance: 1000 });
+    store.addTransaction({ amount: 500, type: "income", category: "其他", date: "2026-09-16", accountId: account.id });
+    store.addTransaction({ amount: 200, type: "expense", category: "餐饮", date: "2026-09-16", accountId: account.id });
+    assert.equal(store.getAccountBalance(account.id), 1300); // 1000 + 500 - 200
+  });
+
+  test("不同账户的交易互不影响余额计算", () => {
+    const accountA = store.addAccount({ name: "账户A", initialBalance: 0 });
+    const accountB = store.addAccount({ name: "账户B", initialBalance: 0 });
+    store.addTransaction({ amount: 100, type: "income", category: "其他", date: "2026-09-16", accountId: accountA.id });
+    store.addTransaction({ amount: 50, type: "income", category: "其他", date: "2026-09-16", accountId: accountB.id });
+    assert.equal(store.getAccountBalance(accountA.id), 100);
+    assert.equal(store.getAccountBalance(accountB.id), 50);
+  });
+
+  test("删除账户不会删除它名下的记账记录，只是清空账户归属", () => {
+    const account = store.addAccount({ name: "临时账户", initialBalance: 0 });
+    const t = store.addTransaction({ amount: 30, type: "expense", category: "餐饮", date: "2026-09-16", accountId: account.id });
+    store.removeAccount(account.id);
+    assert.equal(store.listAccounts().find((a) => a.id === account.id), undefined);
+    const stillThere = store.listTransactions().find((x) => x.id === t.id);
+    assert.ok(stillThere); // 记录还在
+    assert.equal(stillThere.accountId, null); // 只是账户归属被清空
+  });
+
+  test("listTransactions 按账户过滤", () => {
+    const account = store.addAccount({ name: "现金", initialBalance: 0 });
+    store.addTransaction({ amount: 10, type: "expense", category: "餐饮", date: "2026-09-16", accountId: account.id });
+    const defaultAccountId = store.listAccounts()[0].id;
+    store.addTransaction({ amount: 20, type: "expense", category: "餐饮", date: "2026-09-16", accountId: defaultAccountId });
+    assert.equal(store.listTransactions({ accountId: account.id }).length, 1);
+  });
+
+  test("listAccountsWithBalance 把每个账户的余额一起列出来", () => {
+    store.addAccount({ name: "支付宝", initialBalance: 200 });
+    const list = store.listAccountsWithBalance();
+    const alipay = list.find((a) => a.name === "支付宝");
+    assert.equal(alipay.balance, 200); // 没有交易，余额就是期初余额
+  });
+
+  test("对不存在的账户id调用 getAccountBalance 返回 null", () => {
+    assert.equal(store.getAccountBalance("nope"), null);
+  });
+});
+
 describe("游戏娱乐（PRD验收标准8）", () => {
   test("多次游玩时长累加，等于各次之和", () => {
     const game = store.addGame({ name: "塞尔达传说", status: "在玩" });

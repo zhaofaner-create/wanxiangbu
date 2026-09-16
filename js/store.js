@@ -19,7 +19,7 @@
   // 测试时可以注入一个内存里的假 storage，不依赖浏览器环境。
   // 应用运行时使用下面导出的默认单例 `store`，它使用 globalThis.localStorage。
 
-  const { uuid, todayStr, computeNextOccurrence, addDays } = require("./utils.js");
+  const { uuid, todayStr, computeNextOccurrence, addDays, shiftMonth } = require("./utils.js");
 
   const STORAGE_KEY = "faner-app-data";
   const SCHEMA_VERSION = 1;
@@ -54,6 +54,12 @@
       // 汇率表：1 单位该货币 = 多少人民币。应用本身不联网（"离线可用"是硬性要求），拿不到实时汇率，
       // 所以内置一份大致参考值，用户可以在"个人记账"里自己修改成当前的真实汇率。
       financeExchangeRates: { CNY: 1, EUR: 7.8, USD: 7.1 },
+      // 每个分类的月度预算上限（人民币等值），没设置预算的分类不会出现在"预算超支提醒"里。
+      // 多账户支持：每笔记账可以关联一个账户；老数据没有账户概念，init() 时会自动建一个
+      // "默认账户"并把老记录都归到它名下，不会凭空丢失归属。以上两个都是后加字段，不进
+      // isValidDataShape 的 required。
+      financeBudgets: {},
+      financeAccounts: [],
       games: [],
       gameSessions: [],
       settings: {
@@ -103,6 +109,7 @@
         state = defaultState();
         persist();
         rolloverUnfinishedTodayPlan();
+        ensureDefaultAccount();
         return state;
       }
       try {
@@ -118,6 +125,7 @@
         persist();
       }
       rolloverUnfinishedTodayPlan();
+      ensureDefaultAccount();
       return state;
     }
 
@@ -826,14 +834,17 @@
       return Math.round(amount * rate * 100) / 100;
     }
 
-    function addTransaction({ amount, currency = "CNY", type, category, date = todayStr(), note = "" }) {
+    /** accountId 不传的话，默认记到第一个账户名下（多账户功能加入前只有一个隐含账户，
+     * 加入后至少会有 ensureDefaultAccount() 建的"默认账户"，不会出现"记了账却不知道是哪个账户"的情况）。 */
+    function addTransaction({ amount, currency = "CNY", type, category, date = todayStr(), note = "", accountId = null }) {
       const amountCNY = convertToCNY(amount, currency);
-      const t = { id: uuid(), amount, currency, amountCNY, type, category, date, note, createdAt: new Date().toISOString() };
+      const resolvedAccountId = accountId || (state.financeAccounts[0] ? state.financeAccounts[0].id : null);
+      const t = { id: uuid(), amount, currency, amountCNY, type, category, date, note, accountId: resolvedAccountId, createdAt: new Date().toISOString() };
       state.financeTransactions.push(t);
       persist();
       return t;
     }
-    /** 修改一笔已有记录（金额/币种/分类/日期/备注等），不需要删除重新录入。金额或币种变了就重新按当前汇率换算成人民币等值。 */
+    /** 修改一笔已有记录（金额/币种/分类/日期/备注/账户等），不需要删除重新录入。金额或币种变了就重新按当前汇率换算成人民币等值。 */
     function updateTransaction(id, patch) {
       const t = state.financeTransactions.find((x) => x.id === id);
       if (!t) return null;
@@ -847,10 +858,11 @@
       state.financeTransactions = state.financeTransactions.filter((t) => t.id !== id);
       persist();
     }
-    function listTransactions({ month = null } = {}) {
-      const all = state.financeTransactions.map((t) => ({ currency: "CNY", amountCNY: t.amount, ...t }));
-      if (!month) return all;
-      return all.filter((t) => t.date.startsWith(month)); // month: 'YYYY-MM'
+    function listTransactions({ month = null, accountId = null } = {}) {
+      let all = state.financeTransactions.map((t) => ({ currency: "CNY", amountCNY: t.amount, accountId: null, ...t }));
+      if (month) all = all.filter((t) => t.date.startsWith(month)); // month: 'YYYY-MM'
+      if (accountId) all = all.filter((t) => t.accountId === accountId);
+      return all;
     }
     function addCategory(name) {
       if (!state.financeCategories.includes(name)) {
@@ -864,6 +876,107 @@
     }
     function listCategories() {
       return [...state.financeCategories];
+    }
+
+    // ---------- 个人记账：预算超支提醒 ----------
+    /** 设置（或清除，传0/负数/不传）某个分类的月度预算上限；没设置预算的分类不参与"超支提醒"统计。 */
+    function setBudget(category, monthlyLimit) {
+      const n = Number(monthlyLimit);
+      if (!Number.isFinite(n) || n <= 0) {
+        delete state.financeBudgets[category];
+      } else {
+        state.financeBudgets[category] = n;
+      }
+      persist();
+      return { ...state.financeBudgets };
+    }
+    function removeBudget(category) {
+      delete state.financeBudgets[category];
+      persist();
+    }
+    function getBudgets() {
+      return { ...state.financeBudgets };
+    }
+    /** 每个设了预算的分类，这个月已经花了多少、还剩多少、有没有超支——用于首页/记账页的"预算超支提醒"。 */
+    function getBudgetStatus(month = todayStr().slice(0, 7)) {
+      const txs = listTransactions({ month }).filter((t) => t.type === "expense");
+      const spentByCategory = new Map();
+      txs.forEach((t) => spentByCategory.set(t.category, (spentByCategory.get(t.category) || 0) + t.amountCNY));
+      return Object.entries(state.financeBudgets)
+        .map(([category, budget]) => {
+          const spent = Math.round((spentByCategory.get(category) || 0) * 100) / 100;
+          return {
+            category,
+            budget,
+            spent,
+            remaining: Math.round((budget - spent) * 100) / 100,
+            percent: budget > 0 ? Math.round((spent / budget) * 1000) / 10 : 0,
+            overspent: spent > budget,
+          };
+        })
+        .sort((a, b) => b.percent - a.percent);
+    }
+
+    // ---------- 个人记账：收支图表（按月汇总） ----------
+    /** 最近 months 个月（含 refMonth 当月）每个月的收入/支出总额，供"收支图表"用手绘柱状图展示。 */
+    function listMonthlyTotals(months = 6, refMonth = todayStr().slice(0, 7)) {
+      const result = [];
+      for (let i = months - 1; i >= 0; i -= 1) {
+        const month = shiftMonth(refMonth, -i);
+        const txs = listTransactions({ month });
+        const income = Math.round(txs.filter((t) => t.type === "income").reduce((s, t) => s + t.amountCNY, 0) * 100) / 100;
+        const expense = Math.round(txs.filter((t) => t.type === "expense").reduce((s, t) => s + t.amountCNY, 0) * 100) / 100;
+        result.push({ month, income, expense });
+      }
+      return result;
+    }
+
+    // ---------- 个人记账：多账户 ----------
+    /** 多账户功能加入之前，所有记账其实都只记在一个隐含账户里；这里保证至少存在一个账户，
+     * 并把没有账户归属的老记录（accountId 是 null/undefined）都归到这个新建的"默认账户"名下，
+     * 只在完全没有账户的时候跑一次，不会覆盖用户后续自己建的账户结构。 */
+    function ensureDefaultAccount() {
+      if (state.financeAccounts.length > 0) return;
+      const acc = { id: uuid(), name: "默认账户", initialBalance: 0, createdAt: new Date().toISOString() };
+      state.financeAccounts.push(acc);
+      state.financeTransactions.forEach((t) => { if (!t.accountId) t.accountId = acc.id; });
+      persist();
+    }
+    function addAccount({ name, initialBalance = 0 }) {
+      const a = { id: uuid(), name, initialBalance: Number(initialBalance) || 0, createdAt: new Date().toISOString() };
+      state.financeAccounts.push(a);
+      persist();
+      return a;
+    }
+    function updateAccount(id, patch) {
+      const a = state.financeAccounts.find((x) => x.id === id);
+      if (!a) return null;
+      Object.assign(a, patch);
+      persist();
+      return { ...a };
+    }
+    /** 删除账户不会删掉这个账户名下的记账记录，只是把它们的账户归属清空（变成"未分配账户"），
+     * 数据本身不会丢。 */
+    function removeAccount(id) {
+      state.financeAccounts = state.financeAccounts.filter((a) => a.id !== id);
+      state.financeTransactions.forEach((t) => { if (t.accountId === id) t.accountId = null; });
+      persist();
+    }
+    function listAccounts() {
+      return [...state.financeAccounts];
+    }
+    /** 账户余额 = 期初余额 + 这个账户名下所有收入（人民币等值）- 所有支出（人民币等值）。 */
+    function getAccountBalance(accountId) {
+      const account = state.financeAccounts.find((a) => a.id === accountId);
+      if (!account) return null;
+      const txs = listTransactions({ accountId });
+      const income = txs.filter((t) => t.type === "income").reduce((s, t) => s + t.amountCNY, 0);
+      const expense = txs.filter((t) => t.type === "expense").reduce((s, t) => s + t.amountCNY, 0);
+      return Math.round((account.initialBalance + income - expense) * 100) / 100;
+    }
+    /** 每个账户连同它当前余额一起列出来，供账户切换器/账户列表界面直接用。 */
+    function listAccountsWithBalance() {
+      return state.financeAccounts.map((a) => ({ ...a, balance: getAccountBalance(a.id) }));
     }
 
     // ---------- 游戏娱乐 ----------
@@ -971,6 +1084,8 @@
       addShoppingItem, removeShoppingItem, listShoppingItems, syncShoppingListFromLowStock,
       resolveShoppingItem, recordConsumption, listTopConsumedItems,
       addTransaction, updateTransaction, removeTransaction, listTransactions, addCategory, removeCategory, listCategories,
+      setBudget, removeBudget, getBudgets, getBudgetStatus, listMonthlyTotals,
+      addAccount, updateAccount, removeAccount, listAccounts, getAccountBalance, listAccountsWithBalance,
       getExchangeRates, setExchangeRate, CURRENCIES,
       addGame, updateGame, removeGame, listGames, addPlaySession, listSessions, totalMinutesForGame,
       getSettings, updateHomeCardVisibility, setLastBackupAt, manualSave,

@@ -77,6 +77,18 @@ describe("financeMonthlySummary", () => {
     assert.equal(summary.income, 140);
     assert.equal(summary.categoryBreakdown.find((c) => c.category === "餐饮").amount, 140);
   });
+
+  test("传 accountId 时只汇总这一个账户的收支（多账户功能）", () => {
+    const accountA = store.addAccount({ name: "账户A" });
+    const accountB = store.addAccount({ name: "账户B" });
+    store.addTransaction({ amount: 100, type: "expense", category: "餐饮", date: "2026-09-01", accountId: accountA.id });
+    store.addTransaction({ amount: 50, type: "expense", category: "餐饮", date: "2026-09-02", accountId: accountB.id });
+
+    const summaryA = financeMonthlySummary(store, "2026-09", accountA.id);
+    assert.equal(summaryA.expense, 100);
+    const summaryAll = financeMonthlySummary(store, "2026-09");
+    assert.equal(summaryAll.expense, 150); // 不传 accountId 就是所有账户合计
+  });
 });
 
 describe("lowStockAndExpiringItems", () => {

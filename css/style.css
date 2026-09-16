@@ -492,7 +492,8 @@ table.data-table th { background: rgba(255,255,255,0.5); font-weight: 700; color
 
 /* 进度条 */
 .bar-track { height: 6px; background: rgba(91, 96, 104, 0.12); border-radius: 3px; }
-.bar-fill { height: 6px; background: var(--accent); border-radius: 3px; }
+.bar-fill { height: 6px; background: var(--accent); border-radius: 3px; transition: width 0.3s ease; }
+.bar-fill.over { background: var(--danger); }
 
 /* 手绘竖向柱状图（学习时长趋势、游戏游玩时长等统计图表复用这一套） */
 .chart-bars { display: flex; align-items: flex-end; gap: 10px; height: 120px; padding-top: 20px; }
@@ -503,6 +504,14 @@ table.data-table th { background: rgba(255,255,255,0.5); font-weight: 700; color
 .chart-bar.is-empty { background: rgba(91, 96, 104, 0.12); }
 .chart-bar-label { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
 .chart-bar-label.is-today { color: var(--accent); font-weight: 600; }
+
+/* 收支图表：每个月两根并排的柱子（收入/支出），复用上面手绘柱状图的整体框架 */
+.chart-bar.income { background: hsl(150, 55%, 42%); }
+.chart-bar.expense { background: hsl(6, 70%, 58%); }
+.chart-legend-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin: 0 4px 0 12px; vertical-align: middle; }
+.chart-legend-dot:first-child { margin-left: 0; }
+.chart-legend-dot.income { background: hsl(150, 55%, 42%); }
+.chart-legend-dot.expense { background: hsl(6, 70%, 58%); }
 
 .section-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .grow { flex-grow: 1; }

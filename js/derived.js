@@ -58,9 +58,11 @@
    * 某个月的收支汇总：收入、支出、结余，以及按分类的支出占比。
    * 记录可能是不同币种记的（人民币/欧元/美元），这里统一按 amountCNY（记录时汇率换算成的人民币等值）汇总，
    * 保证跨币种也能加总，不会把 58 元和 58 欧元直接相加。
+   * accountId 传了就只统计这一个账户（多账户功能：切到某个具体账户时看这个账户自己的月度收支）；
+   * 不传（默认）就是所有账户合计，和多账户功能加入之前的行为完全一样。
    */
-  function financeMonthlySummary(store, month) {
-    const txs = store.listTransactions({ month });
+  function financeMonthlySummary(store, month, accountId = null) {
+    const txs = store.listTransactions({ month, accountId });
     const income = txs.filter((t) => t.type === "income").reduce((s, t) => s + t.amountCNY, 0);
     const expense = txs.filter((t) => t.type === "expense").reduce((s, t) => s + t.amountCNY, 0);
 

@@ -556,6 +556,54 @@ describe("个人记账（PRD验收标准7）", () => {
   });
 });
 
+describe("个人记账：预算超支提醒 + 收支图表 + 多账户（开发计划第一版暂缓功能之一）", () => {
+  test("设置预算后超支会有警示；收支图表会跟着记账更新", async () => {
+    await goToModule(page, "个人记账");
+    await page.locator(".card-title span", { hasText: "设置预算" }).click();
+    await page.locator('.modal-box [name="餐饮"]').fill("50");
+    await submitModal(page);
+
+    const budgetCard = page.locator(".card", { hasText: "预算超支提醒" });
+    await assert.doesNotReject(budgetCard.waitFor());
+    assert.match(await budgetCard.innerText(), /¥0 \/ ¥50/);
+
+    await page.locator("button", { hasText: "+ 记一笔" }).click();
+    await fillModal(page, { type: "expense", amount: "80", category: "餐饮", date: "2026-09-16" });
+    await submitModal(page);
+
+    assert.match(await budgetCard.innerText(), /¥80 \/ ¥50/);
+    assert.match(await budgetCard.innerText(), /⚠/); // 超支警示符号
+
+    const chartCard = page.locator(".card", { hasText: "收支图表" });
+    await assert.doesNotReject(chartCard.waitFor());
+    assert.equal(await chartCard.locator(".chart-bar-col").count(), 6); // 最近6个月
+  });
+
+  test("新增账户后可以在切换器里筛选，记账时能指定账户，删除账户不影响记账记录", async () => {
+    await goToModule(page, "个人记账");
+    await page.locator("button", { hasText: "账户管理" }).click();
+    await page.locator('.modal-box input[type="text"]').fill("招商银行卡");
+    await page.locator('.modal-box input[type="number"]').fill("1000");
+    await page.locator(".modal-box button", { hasText: "添加" }).click();
+    await assert.doesNotReject(page.locator(".list-row", { hasText: "招商银行卡" }).waitFor());
+    await page.locator(".modal-box .modal-actions button", { hasText: "关闭" }).click();
+
+    // 记一笔到新账户
+    await page.locator("button", { hasText: "+ 记一笔" }).click();
+    await page.locator('.modal-box [name="accountId"]').selectOption({ label: "招商银行卡" });
+    await fillModal(page, { type: "expense", amount: "100", category: "餐饮", date: "2026-09-16", note: "刷卡消费" });
+    await submitModal(page);
+
+    // 切换账户筛选到"招商银行卡"，流水里应该只看到这一笔
+    await page.locator(".pill", { hasText: "招商银行卡" }).click();
+    await assert.doesNotReject(page.locator(".list-row", { hasText: "刷卡消费" }).waitFor());
+
+    // 切回全部账户
+    await page.locator(".pill", { hasText: "全部账户" }).click();
+    await assert.doesNotReject(page.locator(".list-row", { hasText: "刷卡消费" }).waitFor());
+  });
+});
+
 describe("游戏娱乐（PRD验收标准8）", () => {
   test("记录一次游玩后，累计时长正确显示", async () => {
     await goToModule(page, "游戏娱乐");
