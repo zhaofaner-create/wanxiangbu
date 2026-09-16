@@ -455,6 +455,101 @@ describe("饮食计划（PRD验收标准9）", () => {
   });
 });
 
+describe("饮食计划：常用菜谱库 + 自动生成购物清单（开发计划第一版暂缓功能之一）", () => {
+  test("添加、编辑、删除菜谱", () => {
+    const recipe = store.addRecipe({ name: "番茄炒蛋", ingredients: [
+      { name: "番茄", quantity: 2, unit: "个" },
+      { name: "鸡蛋", quantity: 3, unit: "个" },
+    ] });
+    assert.equal(store.listRecipes().length, 1);
+    assert.equal(store.findRecipe(recipe.id).ingredients.length, 2);
+
+    store.updateRecipe(recipe.id, { name: "西红柿炒蛋" });
+    assert.equal(store.findRecipe(recipe.id).name, "西红柿炒蛋");
+
+    store.removeRecipe(recipe.id);
+    assert.equal(store.listRecipes().length, 0);
+  });
+
+  test("把某一餐设置成菜谱库里的菜，会同时填好文字和菜谱关联", () => {
+    const recipe = store.addRecipe({ name: "红烧肉", ingredients: [{ name: "五花肉", quantity: 500, unit: "克" }] });
+    store.setMealEntryFromRecipe("2026-09-16", "dinner", recipe.id);
+    assert.equal(store.getMealEntry("2026-09-16", "dinner"), "红烧肉");
+    assert.equal(store.getMealEntryRecord("2026-09-16", "dinner").recipeId, recipe.id);
+  });
+
+  test("手动重新填写文字会清掉原来的菜谱关联", () => {
+    const recipe = store.addRecipe({ name: "红烧肉", ingredients: [{ name: "五花肉", quantity: 500, unit: "克" }] });
+    store.setMealEntryFromRecipe("2026-09-16", "dinner", recipe.id);
+    store.setMealEntry("2026-09-16", "dinner", "点外卖");
+    assert.equal(store.getMealEntryRecord("2026-09-16", "dinner").recipeId, null);
+    assert.equal(store.getMealEntry("2026-09-16", "dinner"), "点外卖");
+  });
+
+  test("删除菜谱后，已经排进计划里的格子文字还在，只是不再关联菜谱", () => {
+    const recipe = store.addRecipe({ name: "红烧肉", ingredients: [] });
+    store.setMealEntryFromRecipe("2026-09-16", "dinner", recipe.id);
+    store.removeRecipe(recipe.id);
+    const record = store.getMealEntryRecord("2026-09-16", "dinner");
+    assert.equal(record.text, "红烧肉");
+    assert.equal(record.recipeId, null);
+  });
+
+  test("根据本周计划自动生成购物清单：汇总食材，同名同单位自动合并数量", () => {
+    const tomato = store.addRecipe({ name: "番茄炒蛋", ingredients: [
+      { name: "番茄", quantity: 2, unit: "个" }, { name: "鸡蛋", quantity: 3, unit: "个" },
+    ] });
+    const soup = store.addRecipe({ name: "番茄蛋汤", ingredients: [
+      { name: "番茄", quantity: 1, unit: "个" }, { name: "鸡蛋", quantity: 1, unit: "个" },
+    ] });
+    store.setMealEntryFromRecipe("2026-09-14", "lunch", tomato.id); // 周一
+    store.setMealEntryFromRecipe("2026-09-15", "dinner", soup.id); // 周二
+
+    const addedCount = store.generateShoppingListFromMealPlan("2026-09-14");
+    assert.equal(addedCount, 2); // 番茄、鸡蛋 两种食材
+
+    const items = store.listShoppingItems();
+    const tomatoItem = items.find((i) => i.name === "番茄");
+    const eggItem = items.find((i) => i.name === "鸡蛋");
+    assert.equal(tomatoItem.quantity, 3); // 2 + 1
+    assert.equal(eggItem.quantity, 4); // 3 + 1
+    assert.equal(tomatoItem.fromRecipe, true);
+  });
+
+  test("再次生成购物清单不会产生重复条目（同名同单位已存在就跳过）", () => {
+    const recipe = store.addRecipe({ name: "番茄炒蛋", ingredients: [{ name: "番茄", quantity: 2, unit: "个" }] });
+    store.setMealEntryFromRecipe("2026-09-14", "lunch", recipe.id);
+    store.generateShoppingListFromMealPlan("2026-09-14");
+    const countAfterFirst = store.listShoppingItems().length;
+    store.generateShoppingListFromMealPlan("2026-09-14");
+    assert.equal(store.listShoppingItems().length, countAfterFirst);
+  });
+
+  test("食材数量缺失时（没填数量），合并结果不确定数量就显示为空，而不是错误的具体数字", () => {
+    const r1 = store.addRecipe({ name: "菜A", ingredients: [{ name: "盐", quantity: null, unit: "" }] });
+    const r2 = store.addRecipe({ name: "菜B", ingredients: [{ name: "盐", quantity: 5, unit: "" }] });
+    store.setMealEntryFromRecipe("2026-09-14", "lunch", r1.id);
+    store.setMealEntryFromRecipe("2026-09-14", "dinner", r2.id);
+    store.generateShoppingListFromMealPlan("2026-09-14");
+    const salt = store.listShoppingItems().find((i) => i.name === "盐");
+    assert.equal(salt.quantity, null);
+  });
+
+  test("手动填写文字的餐（没有关联菜谱）不会被计入自动生成的购物清单", () => {
+    store.setMealEntry("2026-09-14", "breakfast", "豆浆油条"); // 纯手动文字，没有菜谱
+    const addedCount = store.generateShoppingListFromMealPlan("2026-09-14");
+    assert.equal(addedCount, 0);
+    assert.equal(store.listShoppingItems().length, 0);
+  });
+
+  test("复制上周计划也会把菜谱关联一起复制过去", () => {
+    const recipe = store.addRecipe({ name: "红烧肉", ingredients: [{ name: "五花肉", quantity: 500, unit: "克" }] });
+    store.setMealEntryFromRecipe("2026-09-07", "dinner", recipe.id); // 上周一
+    store.copyWeek("2026-09-07", "2026-09-14");
+    assert.equal(store.getMealEntryRecord("2026-09-14", "dinner").recipeId, recipe.id);
+  });
+});
+
 describe("生活用品库存管理（PRD验收标准6）", () => {
   test("数量低于阈值自动进入购物清单", () => {
     const item = store.addInventoryItem({ name: "纸巾", quantity: 2, unit: "包", lowThreshold: 3 });

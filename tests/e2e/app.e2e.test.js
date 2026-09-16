@@ -374,6 +374,52 @@ describe("饮食计划（PRD验收标准9）", () => {
   });
 });
 
+describe("饮食计划：常用菜谱库 + 自动生成购物清单（开发计划第一版暂缓功能之一）", () => {
+  test("添加菜谱后可以在三餐计划里直接选用，并且能一键生成购物清单", async () => {
+    await goToModule(page, "饮食计划");
+
+    // 切到菜谱库标签页，添加一个菜谱
+    await page.locator(".tab-btn", { hasText: "菜谱库" }).click();
+    await page.locator("button", { hasText: "+ 添加菜谱" }).click();
+    await fillModal(page, { name: "番茄炒蛋" });
+    await page.locator('.modal-box [name="ingredients"]').fill("番茄,2,个\n鸡蛋,3,个");
+    await submitModal(page);
+
+    const recipeCard = page.locator(".card", { hasText: "番茄炒蛋" });
+    await assert.doesNotReject(recipeCard.waitFor());
+    assert.match(await recipeCard.innerText(), /番茄 2个/);
+    assert.match(await recipeCard.innerText(), /鸡蛋 3个/);
+
+    // 切回本周计划，点第一个格子，从菜谱库里选刚才那个菜
+    await page.locator(".tab-btn", { hasText: "本周计划" }).click();
+    const firstCell = page.locator("table.data-table tbody tr").first().locator("td.meal-cell").first();
+    await firstCell.click();
+    await page.locator('.modal-box [name="recipeId"]').selectOption({ label: "番茄炒蛋" });
+    await submitModal(page);
+
+    assert.match(await firstCell.innerText(), /番茄炒蛋/);
+    await assert.doesNotReject(firstCell.locator(".badge", { hasText: "菜谱" }).waitFor());
+
+    // 生成购物清单
+    await page.locator("button", { hasText: "根据本周计划生成购物清单" }).click();
+    assert.match(await page.locator(".content-area").innerText(), /已生成购物清单，新增 2 项食材/);
+
+    // 去库存管理页确认购物清单里确实多了这两种食材
+    await goToModule(page, "库存管理");
+    await assert.doesNotReject(page.locator(".split-side .check-row", { hasText: "番茄" }).waitFor());
+    await assert.doesNotReject(page.locator(".split-side .check-row", { hasText: "鸡蛋" }).waitFor());
+  });
+
+  test("手动填写的三餐格子不受影响，仍然可以照常使用（没有菜谱库也不强制要求选菜谱）", async () => {
+    await goToModule(page, "饮食计划");
+    const secondCell = page.locator("table.data-table tbody tr").first().locator("td.meal-cell").nth(1);
+    await secondCell.click();
+    await fillModal(page, { text: "手动填写的午餐" });
+    await submitModal(page);
+    assert.equal((await secondCell.innerText()).trim(), "手动填写的午餐");
+  });
+});
+
 describe("生活用品库存管理（PRD验收标准6）", () => {
   test("数量低于阈值自动标记低库存，并自动出现在购物清单里", async () => {
     await goToModule(page, "库存管理");

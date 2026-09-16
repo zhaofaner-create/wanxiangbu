@@ -41,6 +41,9 @@
       studyTimeLog: [],
       reminders: [],
       mealPlanEntries: [],
+      // 常用菜谱库：每个菜谱有名字和食材清单（数量/单位可选），供三餐格子直接选用，
+      // 也是"自动生成购物清单"的数据来源。同样是后加字段，不进 isValidDataShape 的 required。
+      recipes: [],
       inventoryItems: [],
       shoppingListItems: [],
       financeTransactions: [],
@@ -554,17 +557,26 @@
     }
 
     // ---------- 饮食计划 ----------
-    function setMealEntry(date, slot, text) {
+    /** recipeId 可选：某餐是从菜谱库里选的，就记下是哪个菜谱，方便"自动生成购物清单"用。
+     * 手动填写文字（不传 recipeId，或显式传 null）会清掉原来的菜谱关联——因为用户已经不再是
+     * "选了这个菜谱"，而是自己重新填了内容，两者不应该再挂钩。 */
+    function setMealEntry(date, slot, text, recipeId = null) {
       const existing = state.mealPlanEntries.find((e) => e.date === date && e.slot === slot);
       if (existing) {
         existing.text = text;
+        existing.recipeId = recipeId;
       } else {
-        state.mealPlanEntries.push({ id: uuid(), date, slot, text });
+        state.mealPlanEntries.push({ id: uuid(), date, slot, text, recipeId });
       }
       persist();
     }
     function getMealEntry(date, slot) {
       return state.mealPlanEntries.find((e) => e.date === date && e.slot === slot)?.text ?? "";
+    }
+    /** 拿到某一餐完整的记录（文字 + 关联的菜谱id），给需要知道"这餐是不是选了菜谱"的界面用。 */
+    function getMealEntryRecord(date, slot) {
+      const e = state.mealPlanEntries.find((x) => x.date === date && x.slot === slot);
+      return e ? { text: e.text, recipeId: e.recipeId || null } : { text: "", recipeId: null };
     }
     function listMealEntriesForWeek(mondayStr) {
       const dates = new Set([0, 1, 2, 3, 4, 5, 6].map((i) => addDays(mondayStr, i)));
@@ -578,9 +590,96 @@
       const entries = listMealEntriesForWeek(fromMonday);
       entries.forEach((e) => {
         const targetDate = addDays(e.date, offsetDays);
-        setMealEntry(targetDate, e.slot, e.text);
+        setMealEntry(targetDate, e.slot, e.text, e.recipeId || null);
       });
       return entries.length;
+    }
+
+    // ---------- 常用菜谱库 ----------
+    function addRecipe({ name, ingredients = [] }) {
+      const r = {
+        id: uuid(),
+        name,
+        ingredients: ingredients.map((i) => ({ name: i.name, quantity: i.quantity == null ? null : Number(i.quantity), unit: i.unit || "" })),
+        createdAt: new Date().toISOString(),
+      };
+      state.recipes.push(r);
+      persist();
+      return r;
+    }
+    function updateRecipe(id, patch) {
+      const r = state.recipes.find((x) => x.id === id);
+      if (!r) return null;
+      if (patch.name !== undefined) r.name = patch.name;
+      if (patch.ingredients !== undefined) {
+        r.ingredients = patch.ingredients.map((i) => ({ name: i.name, quantity: i.quantity == null ? null : Number(i.quantity), unit: i.unit || "" }));
+      }
+      persist();
+      return { ...r };
+    }
+    /** 删除菜谱：已经排进三餐计划里的那些格子不会跟着消失，只是不再指向这个（已经不存在的）菜谱。 */
+    function removeRecipe(id) {
+      state.recipes = state.recipes.filter((r) => r.id !== id);
+      state.mealPlanEntries.forEach((e) => { if (e.recipeId === id) e.recipeId = null; });
+      persist();
+    }
+    function listRecipes() {
+      return [...state.recipes];
+    }
+    function findRecipe(id) {
+      return state.recipes.find((r) => r.id === id) || null;
+    }
+    /** 把某一餐直接设置成菜谱库里的某个菜谱（文字用菜谱名字，同时记下关联）。 */
+    function setMealEntryFromRecipe(date, slot, recipeId) {
+      const recipe = findRecipe(recipeId);
+      if (!recipe) return null;
+      setMealEntry(date, slot, recipe.name, recipe.id);
+      return getMealEntryRecord(date, slot);
+    }
+
+    /**
+     * 根据某一周三餐计划里选用的菜谱，自动汇总食材、生成购物清单条目。
+     * - 只处理关联了菜谱的格子（手动填写文字的格子没有结构化食材，没法自动生成）。
+     * - 同名同单位的食材会自动合并数量；只要有一处数量不确定（没填数量），合并结果就不再显示
+     *   具体数量，只保留"需要买"这件事本身，不会因为半个未知数就把已知的量也搞错。
+     * - 已经在购物清单里的同名同单位条目不会重复添加，避免每点一次"生成"清单就翻倍。
+     * 返回这次实际新增了几条，方便界面提示。
+     */
+    function generateShoppingListFromMealPlan(mondayStr) {
+      const entries = listMealEntriesForWeek(mondayStr).filter((e) => e.recipeId);
+      const aggregated = new Map();
+      entries.forEach((e) => {
+        const recipe = findRecipe(e.recipeId);
+        if (!recipe) return;
+        recipe.ingredients.forEach((ing) => {
+          const name = (ing.name || "").trim();
+          if (!name) return;
+          const unit = ing.unit || "";
+          const key = `${name}|${unit}`;
+          if (aggregated.has(key)) {
+            const cur = aggregated.get(key);
+            cur.quantity = cur.quantity != null && ing.quantity != null ? cur.quantity + ing.quantity : null;
+          } else {
+            aggregated.set(key, { name, unit, quantity: ing.quantity == null ? null : Number(ing.quantity) });
+          }
+        });
+      });
+
+      let addedCount = 0;
+      aggregated.forEach((ing) => {
+        const already = state.shoppingListItems.some(
+          (s) => !s.linkedItemId && s.name.trim() === ing.name && (s.unit || "") === ing.unit
+        );
+        if (already) return;
+        state.shoppingListItems.push({
+          id: uuid(), name: ing.name, linkedItemId: null,
+          quantity: ing.quantity, unit: ing.unit, fromRecipe: true,
+          createdAt: new Date().toISOString(),
+        });
+        addedCount += 1;
+      });
+      if (addedCount > 0) persist();
+      return addedCount;
     }
 
     // ---------- 生活用品库存 / 购物清单 ----------
@@ -796,7 +895,9 @@
       addGoal, removeGoal, listGoals, checkinGoal, isCheckedIn, countCheckins, setDailyLog, getDailyLog,
       startGoalTimer, pauseGoalTimer, listGoalsWithTodayFocus, listStudyTimeSeries,
       addReminder, updateReminder, removeReminder, markReminderDone, listReminders, listRemindersWithNextDate,
-      setMealEntry, getMealEntry, listMealEntriesForWeek, copyWeek,
+      setMealEntry, getMealEntry, getMealEntryRecord, listMealEntriesForWeek, copyWeek,
+      addRecipe, updateRecipe, removeRecipe, listRecipes, findRecipe, setMealEntryFromRecipe,
+      generateShoppingListFromMealPlan,
       addInventoryItem, updateInventoryItem, removeInventoryItem, listInventoryItems, isLowStock,
       addShoppingItem, removeShoppingItem, listShoppingItems, syncShoppingListFromLowStock,
       addTransaction, updateTransaction, removeTransaction, listTransactions, addCategory, removeCategory, listCategories,
