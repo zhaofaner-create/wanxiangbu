@@ -84,8 +84,11 @@ body {
 .check-row:last-child { border-bottom: none; }
 .check-row.done { color: #a8a29e; text-decoration: line-through; }
 .check-row input[type="checkbox"] { width: 16px; height: 16px; flex-shrink: 0; cursor: pointer; }
-.row-delete { margin-left: auto; color: #a8a29e; cursor: pointer; font-size: 13px; }
+.row-edit { margin-left: auto; color: #a8a29e; cursor: pointer; font-size: 13px; }
+.row-edit:hover { color: #1d4ed8; }
+.row-delete { margin-left: 10px; color: #a8a29e; cursor: pointer; font-size: 13px; }
 .row-delete:hover { color: #b91c1c; }
+.check-row-block { display: flex; flex-direction: column; gap: 2px; }
 
 /* 折叠区域 */
 .collapsible-header { display: flex; justify-content: space-between; align-items: center; cursor: pointer; font-size: 13px; font-weight: 600; color: #78716c; }

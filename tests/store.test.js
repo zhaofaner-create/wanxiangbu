@@ -106,6 +106,51 @@ describe("今日计划与关联同步（PRD验收标准4）", () => {
     assert.equal(updated.status, "pending"); // 周期性提醒不会被改成 done
     assert.equal(store.listTodayPlan("2026-09-16")[0].effectiveDone, true); // 但今日计划这一条本身已勾选完成
   });
+
+  test("新增字段：预计用时/优先度/备注 能正常保存，优先度非法值回退为默认的'中'", () => {
+    const item = store.addTodayPlanItem({
+      text: "写论文大纲", date: "2026-09-16", estimatedMinutes: "45", priority: "高", note: "先列提纲",
+    });
+    assert.equal(item.estimatedMinutes, 45);
+    assert.equal(item.priority, "高");
+    assert.equal(item.note, "先列提纲");
+
+    const bad = store.addTodayPlanItem({ text: "乱填优先度", date: "2026-09-16", priority: "特急" });
+    assert.equal(bad.priority, "中");
+
+    const noEstimate = store.addTodayPlanItem({ text: "没填预计用时", date: "2026-09-16" });
+    assert.equal(noEstimate.estimatedMinutes, null);
+    assert.equal(noEstimate.priority, "中");
+  });
+
+  test("updateTodayPlanItem 能修改日期/时间/预计用时/优先度/备注，且不影响完成状态", () => {
+    const item = store.addTodayPlanItem({ text: "复习财务", date: "2026-09-16", priority: "中" });
+    const updated = store.updateTodayPlanItem(item.id, {
+      date: "2026-09-17", time: "14:00", estimatedMinutes: 60, priority: "低", note: "带上笔记本",
+    });
+    assert.equal(updated.date, "2026-09-17");
+    assert.equal(updated.time, "14:00");
+    assert.equal(updated.estimatedMinutes, 60);
+    assert.equal(updated.priority, "低");
+    assert.equal(updated.note, "带上笔记本");
+    // 改到了17号之后，16号的列表里不应该再有它
+    assert.equal(store.listTodayPlan("2026-09-16").length, 0);
+    assert.equal(store.listTodayPlan("2026-09-17").length, 1);
+  });
+
+  test("updateTodayPlanItem 对不存在的id返回null", () => {
+    assert.equal(store.updateTodayPlanItem("not-exist-id", { text: "x" }), null);
+  });
+
+  test("listTodayPlanRange 按日期+时间排序返回一个区间内的所有条目（供首页本周/历史视图使用）", () => {
+    store.addTodayPlanItem({ text: "周一的事", date: "2026-09-14", time: "09:00" });
+    store.addTodayPlanItem({ text: "周三下午", date: "2026-09-16", time: "15:00" });
+    store.addTodayPlanItem({ text: "周三上午", date: "2026-09-16", time: "08:00" });
+    store.addTodayPlanItem({ text: "区间外", date: "2026-09-01" });
+
+    const range = store.listTodayPlanRange("2026-09-14", "2026-09-20");
+    assert.deepEqual(range.map((t) => t.text), ["周一的事", "周三上午", "周三下午"]);
+  });
 });
 
 describe("学习任务：课程与作业", () => {

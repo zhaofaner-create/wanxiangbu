@@ -19,7 +19,20 @@
 
   const meta = { id: "todayPlan", label: "今日计划", title: "今日计划", subtitle: "" };
 
+  const PRIORITY_BADGE_CLASS = { 高: "badge-warning", 中: "badge-info", 低: "" };
+
   let completedOpen = false;
+
+  function itemFormFields() {
+    return [
+      { name: "text", label: "事项内容", type: "text", required: true },
+      { name: "date", label: "日期", type: "date", required: true },
+      { name: "time", label: "开始时间（选填）", type: "time" },
+      { name: "estimatedMinutes", label: "预计用时（分钟，选填）", type: "number" },
+      { name: "priority", label: "优先度", type: "select", options: ["高", "中", "低"] },
+      { name: "note", label: "备注（选填）", type: "textarea" },
+    ];
+  }
 
   function render(container, store, ctx) {
     const today = todayStr();
@@ -37,12 +50,32 @@
     function openAddModal() {
       openFormModal({
         title: "添加今日事项",
-        fields: [
-          { name: "text", label: "事项内容", type: "text", required: true },
-          { name: "time", label: "时间点（选填）", type: "time" },
-        ],
+        fields: itemFormFields(),
+        initialValues: { date: today, priority: "中" },
         onSubmit: (values) => {
-          store.addTodayPlanItem({ text: values.text, time: values.time || null, date: today });
+          store.addTodayPlanItem({
+            text: values.text, time: values.time || null, date: values.date || today,
+            estimatedMinutes: values.estimatedMinutes || null, priority: values.priority, note: values.note || "",
+          });
+          rerender();
+        },
+      });
+    }
+
+    function openEditModal(item) {
+      openFormModal({
+        title: "编辑事项",
+        submitLabel: "保存修改",
+        fields: itemFormFields(),
+        initialValues: {
+          text: item.text, date: item.date, time: item.time || "",
+          estimatedMinutes: item.estimatedMinutes || "", priority: item.priority, note: item.note || "",
+        },
+        onSubmit: (values) => {
+          store.updateTodayPlanItem(item.id, {
+            text: values.text, date: values.date, time: values.time || null,
+            estimatedMinutes: values.estimatedMinutes || null, priority: values.priority, note: values.note || "",
+          });
           rerender();
         },
       });
@@ -100,31 +133,43 @@
     }
 
     function renderRow(item) {
-      return h("label", { class: "check-row" + (item.effectiveDone ? " done" : "") }, [
-        h("input", {
-          type: "checkbox",
-          checked: item.effectiveDone || undefined,
-          onChange: () => {
-            const updated = store.toggleTodayPlanDone(item.id);
-            // 勾选完成后自动展开"已完成"区域，让用户能立刻看到这一项带删除线移动过去了，
-            // 而不是勾选之后这一行凭空消失、看起来像没生效。
-            if (updated && updated.effectiveDone) completedOpen = true;
-            rerender();
-          },
-        }),
-        h("span", {}, item.text + (item.time ? ` · ${item.time}` : "")),
-        item.source !== "manual"
-          ? h("span", { class: "badge" }, item.source === "study" ? "来自学习任务" : "来自提醒事项")
-          : null,
-        h("span", {
-          class: "row-delete",
-          title: "删除",
-          onClick: (e) => {
-            e.preventDefault();
-            store.removeTodayPlanItem(item.id);
-            rerender();
-          },
-        }, "删除"),
+      const metaBits = [];
+      if (item.time) metaBits.push(item.time);
+      if (item.estimatedMinutes) metaBits.push(`预计 ${item.estimatedMinutes} 分钟`);
+      return h("div", { class: "check-row-block" }, [
+        h("label", { class: "check-row" + (item.effectiveDone ? " done" : "") }, [
+          h("input", {
+            type: "checkbox",
+            checked: item.effectiveDone || undefined,
+            onChange: () => {
+              const updated = store.toggleTodayPlanDone(item.id);
+              // 勾选完成后自动展开"已完成"区域，让用户能立刻看到这一项带删除线移动过去了，
+              // 而不是勾选之后这一行凭空消失、看起来像没生效。
+              if (updated && updated.effectiveDone) completedOpen = true;
+              rerender();
+            },
+          }),
+          h("span", { class: "badge " + PRIORITY_BADGE_CLASS[item.priority || "中"] }, item.priority || "中"),
+          h("span", {}, item.text + (metaBits.length ? ` · ${metaBits.join(" · ")}` : "")),
+          item.source !== "manual"
+            ? h("span", { class: "badge" }, item.source === "study" ? "来自学习任务" : "来自提醒事项")
+            : null,
+          h("span", {
+            class: "row-edit",
+            title: "编辑",
+            onClick: (e) => { e.preventDefault(); openEditModal(item); },
+          }, "编辑"),
+          h("span", {
+            class: "row-delete",
+            title: "删除",
+            onClick: (e) => {
+              e.preventDefault();
+              store.removeTodayPlanItem(item.id);
+              rerender();
+            },
+          }, "删除"),
+        ]),
+        item.note ? h("div", { class: "muted", style: "font-size:12px;padding-left:28px;margin-top:-4px;" }, item.note) : null,
       ]);
     }
 

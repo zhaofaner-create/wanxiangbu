@@ -117,9 +117,22 @@
     }
 
     // ---------- 今日计划 ----------
-    function addTodayPlanItem({ text, time = null, date = todayStr(), source = "manual", sourceId = null }) {
+    const PRIORITY_LEVELS = ["高", "中", "低"];
+
+    function addTodayPlanItem({
+      text, time = null, date = todayStr(), source = "manual", sourceId = null,
+      estimatedMinutes = null, priority = "中", note = "",
+    }) {
       const item = {
         id: uuid(), date, text, time, done: false, source, sourceId,
+        estimatedMinutes: estimatedMinutes ? Number(estimatedMinutes) : null,
+        priority: PRIORITY_LEVELS.includes(priority) ? priority : "中",
+        note: note || "",
+        // 计时相关（见 startTodayPlanTimer 等函数）：elapsedSeconds 是已累计的用时，
+        // timerStartedAt 非空表示计时器当前正在跑（其值是本段计时开始的时间戳）。
+        elapsedSeconds: 0,
+        timerStartedAt: null,
+        satisfaction: null,
         createdAt: new Date().toISOString(),
       };
       state.todayPlan.push(item);
@@ -129,6 +142,24 @@
 
     function findTodayPlanItem(id) {
       return state.todayPlan.find((t) => t.id === id) || null;
+    }
+
+    /** 编辑今日计划某一项的基础字段（内容/日期/时间点/预计用时/优先度/备注）。 */
+    function updateTodayPlanItem(id, patch) {
+      const item = findTodayPlanItem(id);
+      if (!item) return null;
+      if (patch.text !== undefined) item.text = patch.text;
+      if (patch.date !== undefined) item.date = patch.date;
+      if (patch.time !== undefined) item.time = patch.time;
+      if (patch.note !== undefined) item.note = patch.note;
+      if (patch.estimatedMinutes !== undefined) {
+        item.estimatedMinutes = patch.estimatedMinutes ? Number(patch.estimatedMinutes) : null;
+      }
+      if (patch.priority !== undefined && PRIORITY_LEVELS.includes(patch.priority)) {
+        item.priority = patch.priority;
+      }
+      persist();
+      return { ...item };
     }
 
     /** 判断某个关联条目对应的"源记录"当前是否已完成/已处理。 */
@@ -146,10 +177,27 @@
       return false;
     }
 
+    /** 给可能是旧数据（缺新字段）的今日计划条目补上默认值，避免界面读到 undefined。 */
+    function withTodayPlanDefaults(t) {
+      return {
+        priority: "中", note: "", estimatedMinutes: null,
+        elapsedSeconds: 0, timerStartedAt: null, satisfaction: null,
+        ...t,
+      };
+    }
+
     function listTodayPlan(date = todayStr()) {
       return state.todayPlan
         .filter((t) => t.date === date)
-        .map((t) => ({ ...t, effectiveDone: t.done || sourceIsComplete(t) }));
+        .map((t) => ({ ...withTodayPlanDefaults(t), effectiveDone: t.done || sourceIsComplete(t) }));
+    }
+
+    /** 列出一个日期范围内（含首尾）的今日计划条目，供首页"今日/本周/历史"切换视图使用。 */
+    function listTodayPlanRange(startDate, endDate) {
+      return state.todayPlan
+        .filter((t) => t.date >= startDate && t.date <= endDate)
+        .map((t) => ({ ...withTodayPlanDefaults(t), effectiveDone: t.done || sourceIsComplete(t) }))
+        .sort((a, b) => (a.date + (a.time || "99:99")).localeCompare(b.date + (b.time || "99:99")));
     }
 
     /**
@@ -514,7 +562,7 @@
     return {
       init, getState, persist,
       addQuickNote, removeQuickNote, listQuickNotes,
-      addTodayPlanItem, toggleTodayPlanDone, removeTodayPlanItem, listTodayPlan,
+      addTodayPlanItem, toggleTodayPlanDone, removeTodayPlanItem, listTodayPlan, updateTodayPlanItem, listTodayPlanRange,
       linkAssignmentToToday, linkReminderToToday,
       addCourse, removeCourse, listCourses,
       addAssignment, updateAssignment, removeAssignment, listAssignments, listUpcomingAssignments,

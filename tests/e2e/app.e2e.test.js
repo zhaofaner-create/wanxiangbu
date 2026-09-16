@@ -76,6 +76,27 @@ describe("今日计划", () => {
     await row.locator("input[type=checkbox]").click();
     assert.equal(await row.evaluate((el) => el.classList.contains("done")), true);
   });
+
+  test("添加事项时可以填写日期/预计用时/优先度/备注，之后可以编辑修改", async () => {
+    await goToModule(page, "今日计划");
+    await page.locator("button", { hasText: "+ 添加今日事项" }).click();
+    await fillModal(page, { text: "写周报", estimatedMinutes: "30", priority: "高", note: "记得抄送经理" });
+    await submitModal(page);
+
+    const block = page.locator(".check-row-block", { hasText: "写周报" });
+    await assert.doesNotReject(block.waitFor());
+    assert.match(await block.innerText(), /预计 30 分钟/);
+    assert.match(await block.innerText(), /记得抄送经理/);
+    assert.equal(await block.locator(".check-row .badge").first().innerText(), "高");
+
+    await block.locator(".row-edit").click();
+    await fillModal(page, { priority: "低", note: "已经抄送过了" });
+    await submitModal(page);
+
+    const updatedBlock = page.locator(".check-row-block", { hasText: "写周报" });
+    assert.equal(await updatedBlock.locator(".check-row .badge").first().innerText(), "低");
+    assert.match(await updatedBlock.innerText(), /已经抄送过了/);
+  });
 });
 
 describe("学习任务 ↔ 今日计划 关联同步（PRD验收标准4）", () => {
