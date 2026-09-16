@@ -14,8 +14,9 @@
    ============================================================================ */
 
 :root {
-  /* 强调色：全局唯一的主强调色——低饱和系统蓝青，用于当前导航/主按钮/选中态/
-     链接/焦点态/关键数据。不额外引入每个模块一套主题色，避免"九套皮肤"。 */
+  /* 强调色：全局唯一的主强调色（交互色）——低饱和系统蓝青，用于当前导航/主按钮/
+     选中态/链接/焦点态/关键数据。模块图标可以有自己的新鲜配色（见下方 icon 相关
+     颜色），但按钮/高亮/焦点这些"交互语义"颜色始终只用这一套，不做"九套皮肤"。 */
   --accent: hsl(202, 42%, 45%);
   --accent-dark: hsl(202, 48%, 32%);
   --accent-soft: hsla(202, 55%, 45%, 0.14);
@@ -37,23 +38,28 @@
   --radius-sm: 10px;
   --radius-lg: 20px;
 
-  /* ---- Liquid Glass 材质参数（可整体调整，所有玻璃元素统一取值） ---- */
-  --g-blur-clear: 20px;
-  --g-blur-regular: 34px;
-  --g-blur-frosted: 16px;
-  --g-saturate: 145%;
-  --g-brightness: 1.04;
+  /* ---- Liquid Glass 材质参数（比第一版更"大胆"：模糊/饱和度更高，
+     玻璃底色更透，让下面彩色环境层能明显透出来）---- */
+  --g-blur-clear: 24px;
+  --g-blur-regular: 40px;
+  --g-blur-frosted: 18px;
+  --g-saturate: 165%;
+  --g-brightness: 1.06;
 
-  --g-tint-clear: rgba(255, 255, 255, 0.4);
-  --g-tint-clear-strong: rgba(255, 255, 255, 0.56);
-  --g-tint-regular: rgba(252, 252, 253, 0.62);
-  --g-tint-frosted: rgba(255, 255, 255, 0.78);
+  --g-tint-clear: rgba(255, 255, 255, 0.3);
+  --g-tint-clear-strong: rgba(255, 255, 255, 0.46);
+  --g-tint-regular: rgba(252, 252, 253, 0.48);
+  --g-tint-frosted: rgba(255, 255, 255, 0.82);
 
-  --g-edge: rgba(255, 255, 255, 0.65);      /* 玻璃顶部/左上方向的高光边缘 */
-  --g-edge-soft: rgba(255, 255, 255, 0.3);  /* 低对比度玻璃边缘 */
+  --g-edge: rgba(255, 255, 255, 0.7);       /* 玻璃顶部/左上方向的高光边缘 */
+  --g-edge-soft: rgba(255, 255, 255, 0.32); /* 低对比度玻璃边缘 */
   --g-hairline: rgba(35, 38, 43, 0.08);     /* 内容承载层的极细分隔线 */
 
-  --g-shadow-ambient: 0 16px 40px rgba(46, 58, 74, 0.16), 0 3px 10px rgba(46, 58, 74, 0.08);
+  /* 液态玻璃的"虹彩"边缘高光——极细一条，暖色到冷色过渡，贴在大块玻璃面板的
+     顶边，制造真实液态玻璃的折射感，而不是平白的一条白线。 */
+  --g-iris-edge: linear-gradient(90deg, hsla(28, 92%, 72%, 0.55), hsla(200, 88%, 72%, 0.5) 48%, hsla(275, 60%, 78%, 0.45) 100%);
+
+  --g-shadow-ambient: 0 18px 44px rgba(52, 60, 78, 0.17), 0 4px 12px rgba(52, 60, 78, 0.09);
   --g-shadow-soft: 0 1px 2px rgba(46, 58, 74, 0.05), 0 8px 20px rgba(46, 58, 74, 0.07);
   --g-shadow-tight: 0 1px 1px rgba(46, 58, 74, 0.05), 0 2px 6px rgba(46, 58, 74, 0.06);
 }
@@ -62,20 +68,23 @@
 html, body { height: 100%; }
 
 /* ---------------------------------------------------------------------------
-   第一层：环境背景。几片错落的低饱和径向光斑（雾白/暖灰/石墨灰/淡蓝灰/青灰）
-   叠加一层近乎不可见的噪点，避免玻璃材质在纯色背景上显得"假"。
-   刻意不用任何原色圆球、不做 mesh-gradient 式的鲜艳撞色。
+   第一层：环境背景（v2，更大胆）。用几片更明显的暖色（珊瑚/杏橙）和冷色
+   （天蓝/青绿）光斑错落分布，中间点缀一点淡紫，制造"液态玻璃能明显折射出
+   环境色"的效果——但色相都停留在浅色高明度区间（不压暗、不发黑发浊），
+   保持"宁静/舒畅/清新"，而不是浓烈撞色。仍然不出现任何天气素材、不做
+   工整对称的"AI 渐变球"效果（光斑大小/位置刻意错落、边缘做了不同程度羽化）。
 --------------------------------------------------------------------------- */
 body {
   margin: 0;
   font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
   color: var(--text-primary);
   background:
-    radial-gradient(1200px 640px at 10% -12%, rgba(214, 224, 234, 0.8), transparent 60%),
-    radial-gradient(900px 780px at 110% 6%, rgba(226, 219, 223, 0.5), transparent 58%),
-    radial-gradient(1000px 840px at 45% 122%, rgba(205, 216, 218, 0.55), transparent 62%),
-    radial-gradient(700px 600px at 60% 35%, rgba(221, 229, 230, 0.35), transparent 65%),
-    linear-gradient(165deg, #eef1f3 0%, #e9eaee 45%, #e2e4e9 100%);
+    radial-gradient(1300px 1000px at 90% -8%, hsla(28, 92%, 78%, 0.55), transparent 60%),
+    radial-gradient(1100px 900px at 4% 14%, hsla(205, 90%, 80%, 0.5), transparent 58%),
+    radial-gradient(1250px 950px at 46% 122%, hsla(190, 72%, 78%, 0.4), transparent 62%),
+    radial-gradient(850px 760px at 72% 52%, hsla(280, 58%, 85%, 0.32), transparent 65%),
+    radial-gradient(700px 620px at 22% 78%, hsla(150, 55%, 82%, 0.24), transparent 62%),
+    linear-gradient(160deg, #f5f1ec 0%, #eef1f4 45%, #eaf1ef 100%);
   background-attachment: fixed;
   -webkit-font-smoothing: antialiased;
   overflow: hidden;
@@ -87,7 +96,7 @@ body::before {
   inset: 0;
   z-index: 0;
   pointer-events: none;
-  opacity: 0.02;
+  opacity: 0.025;
   mix-blend-mode: overlay;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
@@ -140,6 +149,15 @@ body::after {
   position: relative;
   z-index: 5;
 }
+/* 顶边虹彩高光——和 topbar 的同一条高光在视觉上连成一条横贯窗口顶部的
+   "液态玻璃棱边"，这是让材质看起来"是玻璃而不是磨砂塑料"的关键细节。 */
+.sidebar::before, .topbar::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0; height: 2px;
+  background: var(--g-iris-edge);
+  pointer-events: none;
+}
 .sidebar-title { padding: 0 20px 24px 20px; font-size: 16px; font-weight: 700; letter-spacing: -0.01em; color: var(--text-primary); }
 .nav-list { display: flex; flex-direction: column; gap: 18px; }
 .nav-group { display: flex; flex-direction: column; gap: 1px; }
@@ -148,8 +166,8 @@ body::after {
   font-size: 11px; font-weight: 600; letter-spacing: 0.08em; color: var(--text-muted); text-transform: uppercase;
 }
 .nav-item {
-  display: flex; align-items: center; gap: 10px;
-  padding: 8px 20px; margin: 0 10px; width: calc(100% - 20px);
+  display: flex; align-items: center; gap: 11px;
+  padding: 6px 14px; margin: 0 8px; width: calc(100% - 16px);
   font-size: 13.5px; color: var(--text-secondary);
   cursor: pointer; border: none; border-radius: var(--radius-sm); background: none; text-align: left;
   font-family: inherit; transition: background-color 0.15s ease, color 0.15s ease, transform 0.1s ease;
@@ -161,9 +179,18 @@ body::after {
   font-weight: 600; color: var(--accent-dark);
 }
 .nav-item:active { transform: scale(0.98); }
-.nav-icon { width: 16px; height: 16px; flex-shrink: 0; color: var(--text-muted); }
-.nav-item:hover .nav-icon { color: var(--text-secondary); }
-.nav-item.active .nav-icon { color: var(--accent); }
+/* 图标改成"彩色圆角小图标"，每个模块一个新鲜、柔和的渐变色块（不是纯黑/深墨绿
+   那种压抑的颜色），像 macOS 系统设置/提醒事项那样一眼能分辨模块，同时整套
+   交互色（导航高亮/按钮/焦点）仍然只用同一个强调色，两者不冲突。 */
+.nav-icon-tile {
+  width: 28px; height: 28px; border-radius: 8px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.5), 0 2px 6px rgba(30, 40, 55, 0.14);
+  transition: transform 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease;
+}
+.nav-item:hover .nav-icon-tile { filter: brightness(1.05); }
+.nav-item.active .nav-icon-tile { box-shadow: inset 0 1px 0 rgba(255,255,255,0.55), 0 3px 9px rgba(30, 40, 55, 0.22); transform: scale(1.05); }
+.nav-icon { width: 15px; height: 15px; flex-shrink: 0; }
 
 /* 主区域 */
 .main-area { flex-grow: 1; display: flex; flex-direction: column; min-width: 0; position: relative; z-index: 2; }
@@ -299,7 +326,7 @@ body::after {
 .kanban-board { display: flex; gap: 12px; align-items: flex-start; }
 .kanban-column {
   flex: 1; min-width: 0; border-radius: var(--radius); padding: 10px; min-height: 100px;
-  background: rgba(255, 255, 255, 0.42);
+  background: rgba(255, 255, 255, 0.34);
   border: 1px solid var(--g-hairline);
 }
 .kanban-column-title { font-size: 12px; font-weight: 700; color: var(--text-muted); margin-bottom: 8px; }
@@ -342,6 +369,8 @@ body::after {
   display: flex; align-items: center; justify-content: center; z-index: 100;
 }
 .modal-box {
+  position: relative;
+  overflow: hidden;
   background: var(--g-tint-regular);
   -webkit-backdrop-filter: blur(var(--g-blur-regular)) saturate(var(--g-saturate)) brightness(var(--g-brightness));
   backdrop-filter: blur(var(--g-blur-regular)) saturate(var(--g-saturate)) brightness(var(--g-brightness));
@@ -349,6 +378,13 @@ body::after {
   border-radius: var(--radius-lg);
   padding: 22px 24px; width: 360px; max-width: 90vw;
   box-shadow: inset 0 1px 0 var(--g-edge), inset 1px 0 0 var(--g-edge-soft), var(--g-shadow-ambient);
+}
+.modal-box::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0; height: 2px;
+  background: var(--g-iris-edge);
+  pointer-events: none;
 }
 .modal-box-small { width: 320px; }
 .modal-title { font-size: 15px; font-weight: 700; margin-bottom: 14px; }
@@ -358,6 +394,7 @@ body::after {
 .quick-memo-btn { position: relative; }
 .quick-memo-panel {
   position: absolute; top: 60px; right: 28px; width: 300px;
+  overflow: hidden;
   background: var(--g-tint-regular);
   -webkit-backdrop-filter: blur(var(--g-blur-regular)) saturate(var(--g-saturate)) brightness(var(--g-brightness));
   backdrop-filter: blur(var(--g-blur-regular)) saturate(var(--g-saturate)) brightness(var(--g-brightness));
@@ -365,6 +402,13 @@ body::after {
   border-radius: var(--radius);
   box-shadow: inset 0 1px 0 var(--g-edge), var(--g-shadow-ambient);
   padding: 12px; z-index: 90;
+}
+.quick-memo-panel::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0; height: 2px;
+  background: var(--g-iris-edge);
+  pointer-events: none;
 }
 .quick-memo-input-row { display: flex; gap: 8px; margin-bottom: 10px; }
 .quick-memo-input-row .field-input { flex: 1; min-width: 0; width: auto; }
@@ -379,7 +423,7 @@ body::after {
 --------------------------------------------------------------------------- */
 .tabs {
   display: inline-flex; gap: 2px; padding: 3px; border-radius: calc(var(--radius-sm) + 3px);
-  background: rgba(255,255,255,0.34);
+  background: rgba(255,255,255,0.26);
   -webkit-backdrop-filter: blur(var(--g-blur-clear)) saturate(var(--g-saturate));
   backdrop-filter: blur(var(--g-blur-clear)) saturate(var(--g-saturate));
   border: 1px solid var(--g-edge-soft);
@@ -452,10 +496,10 @@ table.data-table th { background: rgba(255,255,255,0.5); font-weight: 700; color
 .card-icon {
   width: 30px; height: 30px; border-radius: 9px; flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
-  background: var(--accent-soft); color: var(--accent);
+  color: #fff;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.5), 0 2px 6px rgba(30, 40, 55, 0.14);
 }
 .card-icon svg { width: 16px; height: 16px; }
-.card-icon.warn { background: var(--danger-soft); color: var(--danger); }
 .card-heading .card-heading-title { font-size: 13.5px; font-weight: 700; color: var(--text-primary); }
 .settings-card-desc { font-size: 12px; color: var(--text-muted); line-height: 1.6; margin-bottom: 12px; }
 .settings-status-line { font-size: 12px; color: var(--text-secondary); margin-bottom: 14px; }

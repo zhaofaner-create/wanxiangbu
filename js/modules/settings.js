@@ -22,19 +22,31 @@
     inventory: "库存管理", finance: "个人记账", games: "游戏娱乐",
   };
 
-  // 每张卡片标题前的小图标，跟侧边导航一样用内联 SVG，不额外依赖图标字体/CDN。
+  // 每张卡片标题前的小图标，跟侧边导航一样用内联 SVG，不额外依赖图标字体/CDN；
+  // 配色也跟侧边导航同一套"新鲜柔和渐变"语言，白色线条图标叠在色块上。
   const ICONS = {
     save: '<path d="M5 4h11l3 3v13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Z"/><path d="M8 4v5h7V4"/><path d="M7 14h10v6H7z"/>',
     backup: '<path d="M7 17a4 4 0 0 1-1-7.9 5 5 0 0 1 9.6-1.7A4.5 4.5 0 0 1 17 17H7Z"/><path d="M12 11v6M9.5 14.5 12 17l2.5-2.5"/>',
     grid: '<rect x="4" y="4" width="7" height="7" rx="1.2"/><rect x="13" y="4" width="7" height="7" rx="1.2"/><rect x="4" y="13" width="7" height="7" rx="1.2"/><rect x="13" y="13" width="7" height="7" rx="1.2"/>',
     warn: '<path d="M12 4 3 20h18L12 4Z"/><path d="M12 10.5v4M12 17h.01"/>',
   };
+  const ICON_COLORS = {
+    save: ["hsl(206, 88%, 74%)", "hsl(206, 78%, 58%)"],
+    backup: ["hsl(188, 70%, 66%)", "hsl(188, 60%, 50%)"],
+    grid: ["hsl(248, 72%, 78%)", "hsl(248, 55%, 64%)"],
+    warn: ["hsl(8, 88%, 74%)", "hsl(355, 70%, 62%)"],
+  };
   function iconSvg(name) {
-    return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICONS[name] || ""}</svg>`;
+    return `<svg viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">${ICONS[name] || ""}</svg>`;
   }
   function cardHeading(iconName, title, warn) {
+    const colors = ICON_COLORS[iconName] || ["hsl(210, 12%, 74%)", "hsl(210, 10%, 56%)"];
     return h("div", { class: "card-heading" }, [
-      h("div", { class: "card-icon" + (warn ? " warn" : ""), html: iconSvg(iconName) }),
+      h("div", {
+        class: "card-icon" + (warn ? " warn" : ""),
+        style: `background:linear-gradient(135deg, ${colors[0]}, ${colors[1]})`,
+        html: iconSvg(iconName),
+      }),
       h("div", { class: "card-heading-title" }, title),
     ]);
   }

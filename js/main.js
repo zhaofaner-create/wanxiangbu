@@ -38,8 +38,24 @@
     games: '<rect x="3" y="8" width="18" height="9" rx="4"/><path d="M8 10.5v4M6 12.5h4"/><circle cx="16" cy="11.5" r="1"/><circle cx="18.2" cy="13.7" r="1"/>',
     settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 13.5a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.9 2.9l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.9-2.9l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.6-1h-.2a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1.1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.9-2.9l.1.1a1.7 1.7 0 0 0 1.9.3h.1a1.7 1.7 0 0 0 1-1.6v-.2a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.6h.1a1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.9 2.9l-.1.1a1.7 1.7 0 0 0-.3 1.9v.1a1.7 1.7 0 0 0 1.6 1h.2a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.6 1Z"/>',
   };
+  // 每个模块一个新鲜、柔和的渐变配色（天蓝/薄荷/薰衣草/珊瑚/杏橙/青绿/藕紫/浅灰蓝……），
+  // 刻意避开偏黑、偏墨绿这类压抑的色调，整体感觉要清新、放松；"数据与设置"作为系统类
+  // 页面保留中性灰蓝，其余模块各有自己的颜色但明度/饱和度统一在同一区间，不会杂乱。
+  const NAV_ICON_COLORS = {
+    home: ["hsl(206, 88%, 74%)", "hsl(206, 78%, 58%)"],
+    todayPlan: ["hsl(160, 62%, 68%)", "hsl(162, 52%, 50%)"],
+    studyTasks: ["hsl(248, 72%, 78%)", "hsl(248, 55%, 64%)"],
+    reminders: ["hsl(18, 92%, 76%)", "hsl(8, 80%, 66%)"],
+    mealPlan: ["hsl(38, 92%, 70%)", "hsl(30, 86%, 58%)"],
+    inventory: ["hsl(188, 70%, 66%)", "hsl(188, 60%, 50%)"],
+    finance: ["hsl(226, 72%, 76%)", "hsl(226, 60%, 60%)"],
+    games: ["hsl(330, 76%, 78%)", "hsl(330, 60%, 64%)"],
+    settings: ["hsl(215, 18%, 74%)", "hsl(215, 16%, 56%)"],
+  };
   function navIconSvg(id) {
-    return `<svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${NAV_ICONS[id] || ""}</svg>`;
+    const colors = NAV_ICON_COLORS[id] || ["hsl(210, 12%, 74%)", "hsl(210, 10%, 56%)"];
+    const glyph = `<svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">${NAV_ICONS[id] || ""}</svg>`;
+    return `<span class="nav-icon-tile" style="background:linear-gradient(135deg, ${colors[0]}, ${colors[1]})">${glyph}</span>`;
   }
 
   const navListEl = document.getElementById("nav-list");
