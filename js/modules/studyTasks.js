@@ -13,6 +13,7 @@
   "use strict";
 
   const { h, mount } = require("../components/dom.js");
+  const { createSegmented } = require("../components/segmented.js");
   const { openFormModal } = require("../components/modal.js");
   const { openConfirm } = require("../components/confirm.js");
   const { studyFocusReport } = require("../derived.js");
@@ -40,23 +41,50 @@
     ctx.setTopbar(meta.title, meta.subtitle);
     function rerender() { render(container, store, ctx); }
 
-    const tabs = h("div", { class: "tabs" }, [
-      h("button", { class: "tab-btn" + (activeTab === "courses" ? " active" : ""), type: "button", onClick: () => { activeTab = "courses"; rerender(); } }, "课程作业"),
-      h("button", { class: "tab-btn" + (activeTab === "goals" ? " active" : ""), type: "button", onClick: () => { activeTab = "goals"; rerender(); } }, "学习目标"),
-    ]);
+    // 主标签页（课程作业/学习目标）和二级视图切换（列表/看板）都各自是一个
+    // 持续存在的分段控件实例：点击时只刷新受影响的插槽（工具栏右侧的按钮、
+    // 视图切换本身、下方主体内容），不会把标签页轨道整体销毁重建，这样液态
+    // 玻璃指示器才能真的从旧选项"流动"到新选项，而不是瞬间跳变。
+    const bodySlot = h("div", {});
+    const toolbarExtraSlot = h("div", { style: "display:contents;" });
+    const addButtonSlot = h("div", { style: "display:contents;" });
 
-    const viewToggle = activeTab === "courses"
-      ? h("div", { class: "tabs" }, [
-          h("button", { class: "tab-btn" + (courseView === "list" ? " active" : ""), type: "button", onClick: () => { courseView = "list"; rerender(); } }, "列表视图"),
-          h("button", { class: "tab-btn" + (courseView === "kanban" ? " active" : ""), type: "button", onClick: () => { courseView = "kanban"; rerender(); } }, "看板视图"),
-        ])
-      : null;
+    function refreshBody() {
+      mount(bodySlot, activeTab === "courses"
+        ? (courseView === "kanban" ? renderKanbanBoard(store, rerender) : renderCoursesTab(store, rerender))
+        : renderGoalsTab(store, rerender));
+    }
+
+    function refreshAddButton() {
+      mount(addButtonSlot, activeTab === "courses" ? addCourseButton(store, rerender) : addGoalButton(store, rerender));
+    }
+
+    function refreshToolbarExtra() {
+      if (activeTab === "courses") {
+        const viewToggleSeg = createSegmented({
+          options: [{ key: "list", label: "列表视图" }, { key: "kanban", label: "看板视图" }],
+          activeKey: courseView,
+          onSelect: (key) => { courseView = key; refreshBody(); },
+        });
+        mount(toolbarExtraSlot, viewToggleSeg.el);
+      } else {
+        mount(toolbarExtraSlot, h("div", { style: "display:contents;" }));
+      }
+    }
+
+    const topTabsSeg = createSegmented({
+      options: [{ key: "courses", label: "课程作业" }, { key: "goals", label: "学习目标" }],
+      activeKey: activeTab,
+      onSelect: (key) => { activeTab = key; refreshToolbarExtra(); refreshAddButton(); refreshBody(); },
+    });
+
+    refreshToolbarExtra();
+    refreshAddButton();
+    refreshBody();
 
     mount(container, h("div", { style: "display:flex;flex-direction:column;gap:16px;" }, [
-      h("div", { class: "section-row" }, [tabs, viewToggle, h("div", { class: "grow" }), activeTab === "courses" ? addCourseButton(store, rerender) : addGoalButton(store, rerender)]),
-      activeTab === "courses"
-        ? (courseView === "kanban" ? renderKanbanBoard(store, rerender) : renderCoursesTab(store, rerender))
-        : renderGoalsTab(store, rerender),
+      h("div", { class: "section-row" }, [topTabsSeg.el, toolbarExtraSlot, h("div", { class: "grow" }), addButtonSlot]),
+      bodySlot,
     ]));
 
     // 有学习目标在计时的时候，每秒刷新一次，让计时数字动起来；切走页面后下一次 tick 自动停掉。

@@ -502,6 +502,77 @@ describe("首页：今日/本周/历史 计划切换视图", () => {
   });
 });
 
+describe("液态玻璃：分段控件/单选胶囊的连续形变切换", () => {
+  test("标签页切换时，高亮指示器是同一个 DOM 节点在流动，不是消失重建；且用了弹簧曲线过渡", async () => {
+    await goToModule(page, "首页总览");
+    const planCard = page.locator(".card", { hasText: "今日计划" }).first();
+    const tabsTrack = planCard.locator(".tabs").first();
+
+    const indicatorBefore = await tabsTrack.locator(".tab-indicator").elementHandle();
+    assert.ok(indicatorBefore, "切换前应该已经有一个 .tab-indicator 节点");
+
+    // 过渡曲线必须是"弹簧"风格（cubic-bezier 且带一定过冲），不是普通的线性/ease
+    const transition = await indicatorBefore.evaluate((el) => getComputedStyle(el).transitionTimingFunction);
+    assert.match(transition, /cubic-bezier/, `transition-timing-function 应该是 cubic-bezier 弹簧曲线，实际是: ${transition}`);
+    const duration = await indicatorBefore.evaluate((el) => getComputedStyle(el).transitionDuration);
+    assert.notEqual(duration, "0s", "指示器切换应该有真实的过渡时长，不能是瞬间跳变");
+
+    await tabsTrack.locator(".tab-btn", { hasText: "本周" }).click();
+    await page.waitForTimeout(600); // 等弹簧过渡走完
+
+    const indicatorAfter = await tabsTrack.locator(".tab-indicator").elementHandle();
+    const isSameNode = await page.evaluate(([a, b]) => a === b, [indicatorBefore, indicatorAfter]);
+    assert.ok(isSameNode, "点击切换标签后，指示器必须是同一个 DOM 节点，而不是销毁重建出的新节点");
+
+    // 位置应该跟"本周"这个按钮对齐，说明流动结束后确实停在了新选项上
+    const btnBox = await tabsTrack.locator(".tab-btn", { hasText: "本周" }).boundingBox();
+    const indicatorBox = await indicatorAfter.boundingBox();
+    assert.ok(Math.abs(btnBox.x - indicatorBox.x) < 2, `指示器应该对齐到"本周"按钮，按钮x=${btnBox.x}，指示器x=${indicatorBox.x}`);
+  });
+
+  test("学习任务的两组标签（课程作业/学习目标、列表/看板）各自独立形变切换，互不干扰", async () => {
+    await goToModule(page, "学习任务");
+    const topTabs = page.locator(".section-row").filter({ has: page.locator(".tab-btn", { hasText: "课程作业" }) }).locator(".tabs").first();
+
+    const topIndicatorBefore = await topTabs.locator(".tab-indicator").elementHandle();
+    await topTabs.locator(".tab-btn", { hasText: "学习目标" }).click();
+    await page.waitForTimeout(200);
+    await assert.doesNotReject(page.locator(".card-title", { hasText: "学习目标" }).waitFor());
+    const topIndicatorAfter = await topTabs.locator(".tab-indicator").elementHandle();
+    assert.ok(await page.evaluate(([a, b]) => a === b, [topIndicatorBefore, topIndicatorAfter]), "顶层标签切换后指示器应保持同一节点");
+
+    // 切回"课程作业"后再测试内部的"列表视图/看板视图"二级切换
+    await topTabs.locator(".tab-btn", { hasText: "课程作业" }).click();
+    await page.waitForTimeout(200);
+    const viewTabs = page.locator(".tabs").filter({ has: page.locator(".tab-btn", { hasText: "看板视图" }) });
+    const viewIndicatorBefore = await viewTabs.locator(".tab-indicator").elementHandle();
+    await viewTabs.locator(".tab-btn", { hasText: "看板视图" }).click();
+    await page.waitForTimeout(200);
+    await assert.doesNotReject(page.locator(".kanban-board").waitFor());
+    const viewIndicatorAfter = await viewTabs.locator(".tab-indicator").elementHandle();
+    assert.ok(await page.evaluate(([a, b]) => a === b, [viewIndicatorBefore, viewIndicatorAfter]), "列表/看板视图切换后指示器应保持同一节点");
+  });
+
+  test("游戏娱乐的状态筛选胶囊切换时，胶囊指示器同样是连续流动而不是跳变重建", async () => {
+    await goToModule(page, "游戏娱乐");
+    await page.locator("button", { hasText: "+ 添加游戏" }).click();
+    await fillModal(page, { name: "塞尔达传说", status: "在玩" });
+    await submitModal(page);
+
+    const pillGroup = page.locator(".pill-group").first();
+    const indicatorBefore = await pillGroup.locator(".pill-indicator").elementHandle();
+    await pillGroup.locator(".pill", { hasText: "在玩" }).click();
+    await page.waitForTimeout(600);
+    await assert.doesNotReject(page.locator("text=塞尔达传说").waitFor());
+
+    const indicatorAfter = await pillGroup.locator(".pill-indicator").elementHandle();
+    assert.ok(await page.evaluate(([a, b]) => a === b, [indicatorBefore, indicatorAfter]), "筛选胶囊切换后指示器应保持同一节点");
+    const btnBox = await pillGroup.locator(".pill", { hasText: "在玩" }).boundingBox();
+    const indicatorBox = await indicatorAfter.boundingBox();
+    assert.ok(Math.abs(btnBox.x - indicatorBox.x) < 2, "胶囊指示器应该对齐到当前选中的筛选项");
+  });
+});
+
 describe("数据持久性（PRD验收标准3）", () => {
   test("刷新页面后数据仍在", async () => {
     await goToModule(page, "游戏娱乐");

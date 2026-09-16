@@ -13,6 +13,7 @@
   "use strict";
 
   const { h, mount, formatMoney } = require("../components/dom.js");
+  const { createSegmented } = require("../components/segmented.js");
   const { homeSummary } = require("../derived.js");
   const { todayStr, formatDateDisplay, weekdayLabel, startOfWeek, addDays } = require("../utils.js");
 
@@ -43,25 +44,18 @@
     const weekEnd = addDays(weekStart, 6);
     const historyStart = addDays(today, -30);
     const historyEnd = addDays(today, -1);
-    const rangeItems = activeRange === "today"
-      ? store.listTodayPlanRange(today, today)
-      : activeRange === "week"
-        ? store.listTodayPlanRange(weekStart, weekEnd)
-        : store.listTodayPlanRange(historyStart, historyEnd);
 
-    const planCard = h("div", { class: "card" }, [
-      h("div", { class: "card-title" }, [
-        h("span", {}, "今日计划"),
-        h("span", { class: "muted", style: "cursor:pointer;font-weight:400;", onClick: () => ctx.navigateTo("todayPlan") }, "查看全部 ›"),
-      ]),
-      h("div", { class: "tabs", style: "margin-bottom:10px;" }, RANGE_TABS.map((t) =>
-        h("button", {
-          class: "tab-btn" + (activeRange === t.key ? " active" : ""),
-          type: "button",
-          onClick: () => { activeRange = t.key; rerender(); },
-        }, t.label)
-      )),
-      rangeItems.length === 0
+    function computeRangeItems() {
+      return activeRange === "today"
+        ? store.listTodayPlanRange(today, today)
+        : activeRange === "week"
+          ? store.listTodayPlanRange(weekStart, weekEnd)
+          : store.listTodayPlanRange(historyStart, historyEnd);
+    }
+
+    function renderRangeItems() {
+      const rangeItems = computeRangeItems();
+      return rangeItems.length === 0
         ? h("div", { class: "empty-hint" }, activeRange === "history" ? "过去30天没有记录" : "没有安排事项")
         : h(
             "div",
@@ -73,18 +67,41 @@
                   checked: item.effectiveDone || undefined,
                   onChange: () => {
                     store.toggleTodayPlanDone(item.id);
-                    rerender();
+                    refreshRangeItems();
                   },
                 }),
                 h("span", { class: "badge " + PRIORITY_BADGE_CLASS[item.priority || "中"] }, item.priority || "中"),
                 activeRange !== "today" ? h("span", { class: "muted", style: "font-size:11px;" }, formatDateDisplay(item.date)) : null,
                 h("span", {}, item.text),
+                item.rolledFrom ? h("span", { class: "badge badge-rolled" }, `延期自 ${formatDateDisplay(item.rolledFrom)}`) : null,
                 item.source !== "manual"
                   ? h("span", { class: "badge spacer" }, item.source === "study" ? "来自学习任务" : "来自提醒事项")
                   : null,
               ])
             )
-          ),
+          );
+    }
+
+    // 内容插槽是一个独立、持续存在的 DOM 节点：切换"今日/本周/历史"时只替换
+    // 这一个插槽，标签页轨道（含液态玻璃指示器）本身完全不动，指示器才能真的
+    // "流动"过去，而不是随着整块内容一起被销毁重建、瞬间跳变。
+    const itemsSlot = h("div", {});
+    function refreshRangeItems() { mount(itemsSlot, renderRangeItems()); }
+    refreshRangeItems();
+
+    const rangeTabs = createSegmented({
+      options: RANGE_TABS.map((t) => ({ key: t.key, label: t.label })),
+      activeKey: activeRange,
+      onSelect: (key) => { activeRange = key; refreshRangeItems(); },
+    });
+
+    const planCard = h("div", { class: "card" }, [
+      h("div", { class: "card-title" }, [
+        h("span", {}, "今日计划"),
+        h("span", { class: "muted", style: "cursor:pointer;font-weight:400;", onClick: () => ctx.navigateTo("todayPlan") }, "查看全部 ›"),
+      ]),
+      h("div", { style: "margin-bottom:10px;" }, [rangeTabs.el]),
+      itemsSlot,
     ]);
 
     function summaryCard({ key, title, main, sub, warn, moduleId }) {

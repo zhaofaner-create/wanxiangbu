@@ -59,6 +59,11 @@
      顶边，制造真实液态玻璃的折射感，而不是平白的一条白线。 */
   --g-iris-edge: linear-gradient(90deg, hsla(28, 92%, 72%, 0.55), hsla(200, 88%, 72%, 0.5) 48%, hsla(275, 60%, 78%, 0.45) 100%);
 
+  /* 分段控件/单选胶囊的"液态形变"切换动画——弹簧曲线：先略微过冲再回弹，
+     模拟真实液态玻璃在两个选项之间流动、微微晃动一下再稳定下来的手感。 */
+  --spring-duration: 0.5s;
+  --spring-ease: cubic-bezier(0.34, 1.56, 0.64, 1);
+
   --g-shadow-ambient: 0 18px 44px rgba(52, 60, 78, 0.17), 0 4px 12px rgba(52, 60, 78, 0.09);
   --g-shadow-soft: 0 1px 2px rgba(46, 58, 74, 0.05), 0 8px 20px rgba(46, 58, 74, 0.07);
   --g-shadow-tight: 0 1px 1px rgba(46, 58, 74, 0.05), 0 2px 6px rgba(46, 58, 74, 0.06);
@@ -284,6 +289,7 @@ body::after {
 .badge-warning { background: var(--danger-soft); color: var(--danger); }
 .badge-success { background: var(--success-soft); color: var(--success); }
 .badge-info { background: var(--accent-soft); color: var(--accent-dark); }
+.badge-rolled { background: hsla(30, 86%, 58%, 0.16); color: hsl(28, 70%, 40%); }
 
 /* 复选框行 */
 .check-row { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--g-hairline); font-size: 13px; }
@@ -419,9 +425,12 @@ body::after {
 
 /* ---------------------------------------------------------------------------
    标签页 / 筛选胶囊 —— macOS 分段控件（segmented control）质感：
-   一整条 glass-clear 轨道，选中项是轨道内一枚提亮的小玻璃块。
+   一整条 glass-clear 轨道，选中态是 .tab-indicator/.pill-indicator 这一个
+   持续存在的节点（见 js/components/segmented.js），点击切换时它自己从旧
+   位置流动+形变到新位置，而不是"旧背景消失、新背景出现"。
 --------------------------------------------------------------------------- */
 .tabs {
+  position: relative;
   display: inline-flex; gap: 2px; padding: 3px; border-radius: calc(var(--radius-sm) + 3px);
   background: rgba(255,255,255,0.26);
   -webkit-backdrop-filter: blur(var(--g-blur-clear)) saturate(var(--g-saturate));
@@ -429,29 +438,43 @@ body::after {
   border: 1px solid var(--g-edge-soft);
   box-shadow: inset 0 1px 2px rgba(46,58,74,0.06);
 }
+.tab-indicator {
+  position: absolute; top: 0; left: 0; z-index: 0; pointer-events: none;
+  border-radius: var(--radius-sm);
+  background: rgba(255,255,255,0.85);
+  box-shadow: 0 1px 4px rgba(46,58,74,0.14), inset 0 0 0 1px rgba(255,255,255,0.5);
+  transition: transform var(--spring-duration) var(--spring-ease), width var(--spring-duration) var(--spring-ease), height var(--spring-duration) var(--spring-ease);
+  will-change: transform, width, height;
+}
 .tab-btn {
+  position: relative; z-index: 1;
   padding: 6px 15px; border-radius: var(--radius-sm); font-size: 13px; font-weight: 500;
   border: none; background: transparent; color: var(--text-secondary); cursor: pointer; font-family: inherit;
-  transition: background-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+  transition: color 0.15s ease;
 }
 .tab-btn:hover { color: var(--text-primary); }
-.tab-btn.active {
-  background: rgba(255,255,255,0.85);
-  color: var(--text-primary);
-  box-shadow: 0 1px 4px rgba(46,58,74,0.14), inset 0 0 0 1px rgba(255,255,255,0.5);
-  font-weight: 600;
-}
+.tab-btn.active { color: var(--text-primary); font-weight: 600; }
 
+.pill-group { position: relative; display: inline-flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.pill-indicator {
+  position: absolute; top: 0; left: 0; z-index: 0; pointer-events: none;
+  border-radius: 14px;
+  background: var(--accent);
+  box-shadow: 0 2px 8px hsla(202,50%,35%,0.35);
+  transition: transform var(--spring-duration) var(--spring-ease), width var(--spring-duration) var(--spring-ease), height var(--spring-duration) var(--spring-ease);
+  will-change: transform, width, height;
+}
 .pill {
+  position: relative; z-index: 1;
   padding: 6px 14px; border-radius: 14px; font-size: 12px;
   border: 1px solid var(--g-edge-soft);
   background: var(--g-tint-clear);
   -webkit-backdrop-filter: blur(var(--g-blur-clear)) saturate(var(--g-saturate));
   backdrop-filter: blur(var(--g-blur-clear)) saturate(var(--g-saturate));
-  color: var(--text-secondary); cursor: pointer; font-family: inherit; transition: all 0.15s ease;
+  color: var(--text-secondary); cursor: pointer; font-family: inherit; transition: color 0.15s ease, background-color 0.15s ease;
 }
 .pill:hover { background: var(--g-tint-clear-strong); color: var(--text-primary); }
-.pill.active { background: var(--accent); color: #fff; border-color: transparent; box-shadow: 0 2px 8px hsla(202,50%,35%,0.35); }
+.pill.active { background: transparent; color: #fff; border-color: transparent; }
 
 /* 表格（饮食计划、库存等） */
 table.data-table { width: 100%; border-collapse: collapse; }

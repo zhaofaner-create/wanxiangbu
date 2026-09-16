@@ -13,6 +13,7 @@
   "use strict";
 
   const { h, mount } = require("../components/dom.js");
+  const { createSegmented } = require("../components/segmented.js");
   const { openFormModal } = require("../components/modal.js");
   const { openConfirm } = require("../components/confirm.js");
   const { todayStr } = require("../utils.js");
@@ -66,41 +67,54 @@
     }
 
     const filters = ["全部", ...STATUS_OPTIONS];
-    const filterRow = h("div", { class: "section-row" }, filters.map((f) =>
-      h("button", { class: "pill" + (activeFilter === f ? " active" : ""), type: "button", onClick: () => { activeFilter = f; rerender(); } }, f)
-    ));
 
-    const games = activeFilter === "全部" ? store.listGames() : store.listGames(activeFilter);
-    const cards = games.map((g) => {
-      const total = store.totalMinutesForGame(g.id);
-      const hours = Math.floor(total / 60);
-      const mins = total % 60;
-      return h("div", { class: "card", style: "cursor:pointer;", onClick: () => openEditGameModal(g) }, [
-        h("div", { class: "section-row", style: "justify-content:space-between;align-items:flex-start;" }, [
-          h("div", { style: "font-size:14px;font-weight:600;" }, g.name),
-          h("span", { class: "badge" + (g.status === "在玩" ? " badge-info" : g.status === "已通关" ? " badge-success" : "") }, g.status),
-        ]),
-        h("div", { class: "muted", style: "font-size:12px;margin-top:8px;" }, `累计时长 · ${hours} 小时 ${mins} 分钟`),
-        g.note ? h("div", { class: "muted", style: "font-size:12px;margin-top:4px;" }, `备注：${g.note}`) : null,
-        h("span", {
-          class: "row-delete",
-          style: "display:inline-block;margin-top:8px;",
-          onClick: (e) => {
-            e.stopPropagation();
-            openConfirm({ message: `删除游戏「${g.name}」及其游玩记录？`, danger: true, confirmLabel: "删除", onConfirm: () => { store.removeGame(g.id); rerender(); } });
-          },
-        }, "删除"),
-      ]);
+    function renderGameCards() {
+      const games = activeFilter === "全部" ? store.listGames() : store.listGames(activeFilter);
+      const cards = games.map((g) => {
+        const total = store.totalMinutesForGame(g.id);
+        const hours = Math.floor(total / 60);
+        const mins = total % 60;
+        return h("div", { class: "card", style: "cursor:pointer;", onClick: () => openEditGameModal(g) }, [
+          h("div", { class: "section-row", style: "justify-content:space-between;align-items:flex-start;" }, [
+            h("div", { style: "font-size:14px;font-weight:600;" }, g.name),
+            h("span", { class: "badge" + (g.status === "在玩" ? " badge-info" : g.status === "已通关" ? " badge-success" : "") }, g.status),
+          ]),
+          h("div", { class: "muted", style: "font-size:12px;margin-top:8px;" }, `累计时长 · ${hours} 小时 ${mins} 分钟`),
+          g.note ? h("div", { class: "muted", style: "font-size:12px;margin-top:4px;" }, `备注：${g.note}`) : null,
+          h("span", {
+            class: "row-delete",
+            style: "display:inline-block;margin-top:8px;",
+            onClick: (e) => {
+              e.stopPropagation();
+              openConfirm({ message: `删除游戏「${g.name}」及其游玩记录？`, danger: true, confirmLabel: "删除", onConfirm: () => { store.removeGame(g.id); rerender(); } });
+            },
+          }, "删除"),
+        ]);
+      });
+      return cards.length ? h("div", { class: "summary-grid" }, cards) : h("div", { class: "empty-hint" }, "还没有添加游戏");
+    }
+
+    // 筛选胶囊也是一个持续存在的分段控件：切换筛选条件时只刷新下面的游戏卡片
+    // 插槽，胶囊轨道本身（含液态指示器）不会被整体重建。
+    const cardsSlot = h("div", {});
+    function refreshCards() { mount(cardsSlot, renderGameCards()); }
+    refreshCards();
+
+    const filterSeg = createSegmented({
+      kind: "pill",
+      options: filters.map((f) => ({ key: f, label: f })),
+      activeKey: activeFilter,
+      onSelect: (key) => { activeFilter = key; refreshCards(); },
     });
 
     mount(container, h("div", { style: "display:flex;flex-direction:column;gap:16px;" }, [
       h("div", { class: "section-row" }, [
-        filterRow,
+        filterSeg.el,
         h("div", { class: "grow" }),
         h("button", { class: "btn btn-outline", type: "button", onClick: openLogSessionModal }, "记一次游玩"),
         h("button", { class: "btn btn-primary", type: "button", onClick: openAddGameModal }, "+ 添加游戏"),
       ]),
-      cards.length ? h("div", { class: "summary-grid" }, cards) : h("div", { class: "empty-hint" }, "还没有添加游戏"),
+      cardsSlot,
     ]));
   }
 
