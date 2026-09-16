@@ -64,6 +64,19 @@ describe("financeMonthlySummary", () => {
     assert.equal(summary.expense, 0);
     assert.deepEqual(summary.categoryBreakdown, []);
   });
+
+  test("跨币种记账：按人民币等值汇总，不会把不同货币的数字直接相加", () => {
+    store.setExchangeRate("EUR", 8);
+    store.setExchangeRate("USD", 7);
+    store.addTransaction({ amount: 60, currency: "CNY", type: "expense", category: "餐饮", date: "2026-09-01" });
+    store.addTransaction({ amount: 10, currency: "EUR", type: "expense", category: "餐饮", date: "2026-09-02" }); // = 80 CNY
+    store.addTransaction({ amount: 20, currency: "USD", type: "income", category: "其他", date: "2026-09-03" }); // = 140 CNY
+
+    const summary = financeMonthlySummary(store, "2026-09");
+    assert.equal(summary.expense, 140); // 60 + 80
+    assert.equal(summary.income, 140);
+    assert.equal(summary.categoryBreakdown.find((c) => c.category === "餐饮").amount, 140);
+  });
 });
 
 describe("lowStockAndExpiringItems", () => {

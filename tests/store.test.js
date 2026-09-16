@@ -423,6 +423,52 @@ describe("个人记账（PRD验收标准7）", () => {
   });
 });
 
+describe("个人记账：多币种 + 汇率换算", () => {
+  test("默认汇率表：人民币记录 amountCNY 就等于原金额", () => {
+    const t = store.addTransaction({ amount: 100, type: "expense", category: "餐饮", date: "2026-09-16" });
+    assert.equal(t.currency, "CNY");
+    assert.equal(t.amountCNY, 100);
+  });
+
+  test("按当前汇率把外币记录换算成人民币等值", () => {
+    store.setExchangeRate("EUR", 8);
+    const t = store.addTransaction({ amount: 50, currency: "EUR", type: "expense", category: "餐饮", date: "2026-09-16" });
+    assert.equal(t.currency, "EUR");
+    assert.equal(t.amountCNY, 400); // 50 * 8
+  });
+
+  test("改汇率不会影响已经记过的账（只影响之后新记的）", () => {
+    store.setExchangeRate("USD", 7);
+    const t1 = store.addTransaction({ amount: 10, currency: "USD", type: "expense", category: "其他", date: "2026-09-16" });
+    assert.equal(t1.amountCNY, 70);
+    store.setExchangeRate("USD", 7.5);
+    assert.equal(store.listTransactions().find((t) => t.id === t1.id).amountCNY, 70); // 老记录不变
+    const t2 = store.addTransaction({ amount: 10, currency: "USD", type: "expense", category: "其他", date: "2026-09-16" });
+    assert.equal(t2.amountCNY, 75); // 新记录按新汇率
+  });
+
+  test("汇率必须是正数，非法值不生效；人民币自己的汇率不能被改", () => {
+    const before = store.getExchangeRates();
+    store.setExchangeRate("EUR", -5);
+    store.setExchangeRate("EUR", "abc");
+    assert.equal(store.getExchangeRates().EUR, before.EUR);
+    store.setExchangeRate("CNY", 2);
+    assert.equal(store.getExchangeRates().CNY, 1);
+  });
+
+  test("编辑一笔记录：改金额/币种后，人民币等值重新计算", () => {
+    const t = store.addTransaction({ amount: 100, type: "expense", category: "餐饮", date: "2026-09-16" });
+    const updated = store.updateTransaction(t.id, { amount: 20, currency: "EUR" });
+    assert.equal(updated.amount, 20);
+    assert.equal(updated.currency, "EUR");
+    assert.equal(updated.amountCNY, 20 * store.getExchangeRates().EUR);
+  });
+
+  test("编辑不存在的记录返回 null", () => {
+    assert.equal(store.updateTransaction("no-such-id", { amount: 1 }), null);
+  });
+});
+
 describe("游戏娱乐（PRD验收标准8）", () => {
   test("多次游玩时长累加，等于各次之和", () => {
     const game = store.addGame({ name: "塞尔达传说", status: "在玩" });

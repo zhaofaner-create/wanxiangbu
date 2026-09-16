@@ -54,15 +54,19 @@
     };
   }
 
-  /** 某个月的收支汇总：收入、支出、结余，以及按分类的支出占比。 */
+  /**
+   * 某个月的收支汇总：收入、支出、结余，以及按分类的支出占比。
+   * 记录可能是不同币种记的（人民币/欧元/美元），这里统一按 amountCNY（记录时汇率换算成的人民币等值）汇总，
+   * 保证跨币种也能加总，不会把 58 元和 58 欧元直接相加。
+   */
   function financeMonthlySummary(store, month) {
     const txs = store.listTransactions({ month });
-    const income = txs.filter((t) => t.type === "income").reduce((s, t) => s + t.amount, 0);
-    const expense = txs.filter((t) => t.type === "expense").reduce((s, t) => s + t.amount, 0);
+    const income = txs.filter((t) => t.type === "income").reduce((s, t) => s + t.amountCNY, 0);
+    const expense = txs.filter((t) => t.type === "expense").reduce((s, t) => s + t.amountCNY, 0);
 
     const byCategory = new Map();
     txs.filter((t) => t.type === "expense").forEach((t) => {
-      byCategory.set(t.category, (byCategory.get(t.category) || 0) + t.amount);
+      byCategory.set(t.category, (byCategory.get(t.category) || 0) + t.amountCNY);
     });
     const categoryBreakdown = [...byCategory.entries()]
       .map(([category, amount]) => ({

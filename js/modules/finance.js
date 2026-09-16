@@ -20,6 +20,16 @@
 
   const meta = { id: "finance", label: "个人记账", title: "个人记账", subtitle: "" };
 
+  const CURRENCY_LABELS = { CNY: "人民币 (CNY)", EUR: "欧元 (EUR)", USD: "美元 (USD)" };
+  const CURRENCY_SYMBOLS = { CNY: "¥", EUR: "€", USD: "$" };
+
+  /** 按币种格式化金额（不是人民币的话，记账列表里单独用这个，而不是只认 ¥ 的 formatMoney）。 */
+  function formatByCurrency(amount, currency) {
+    const sign = amount < 0 ? "-" : "";
+    const symbol = CURRENCY_SYMBOLS[currency] || currency + " ";
+    return `${sign}${symbol}${Math.abs(amount).toLocaleString("zh-CN", { maximumFractionDigits: 2 })}`;
+  }
+
   let currentMonth = null;
 
   function render(container, store, ctx) {
@@ -28,23 +38,63 @@
     ctx.setTopbar(meta.title, meta.subtitle);
     function rerender() { render(container, store, ctx); }
 
+    function transactionFields(categories) {
+      return [
+        { name: "type", label: "类型", type: "select", options: [{ value: "expense", label: "支出" }, { value: "income", label: "收入" }] },
+        { name: "amount", label: "金额", type: "number", step: "0.01", required: true },
+        { name: "currency", label: "货币单位", type: "select", options: store.CURRENCIES.map((c) => ({ value: c, label: CURRENCY_LABELS[c] })) },
+        { name: "category", label: "分类", type: "select", options: categories },
+        { name: "date", label: "日期", type: "date", required: true },
+        { name: "note", label: "备注（选填）", type: "text" },
+      ];
+    }
+
     function openAddModal() {
       const categories = store.listCategories();
       openFormModal({
         title: "记一笔",
-        fields: [
-          { name: "type", label: "类型", type: "select", options: [{ value: "expense", label: "支出" }, { value: "income", label: "收入" }] },
-          { name: "amount", label: "金额", type: "number", step: "0.01", required: true },
-          { name: "category", label: "分类", type: "select", options: categories },
-          { name: "date", label: "日期", type: "date", required: true },
-          { name: "note", label: "备注（选填）", type: "text" },
-        ],
-        initialValues: { date: todayStr() },
+        fields: transactionFields(categories),
+        initialValues: { date: todayStr(), currency: "CNY" },
         onSubmit: (v) => {
-          store.addTransaction({ amount: v.amount, type: v.type, category: v.category, date: v.date, note: v.note || "" });
+          store.addTransaction({ amount: v.amount, currency: v.currency || "CNY", type: v.type, category: v.category, date: v.date, note: v.note || "" });
           rerender();
         },
       });
+    }
+
+    function openExchangeRateModal() {
+      const rates = store.getExchangeRates();
+      const foreign = store.CURRENCIES.filter((c) => c !== "CNY");
+      const inputs = {};
+      const rows = foreign.map((c) => {
+        const input = h("input", { class: "field-input", type: "number", step: "0.0001", value: String(rates[c]) });
+        inputs[c] = input;
+        return h("div", { class: "field-row" }, [
+          h("label", { class: "field-label" }, `1 ${CURRENCY_LABELS[c]} = 多少人民币`),
+          input,
+        ]);
+      });
+      const overlay = h("div", { class: "modal-overlay" }, [
+        h("div", { class: "modal-box" }, [
+          h("div", { class: "modal-title" }, "汇率设置"),
+          h("div", { class: "muted", style: "font-size:12px;margin-bottom:14px;" },
+            "这个应用不联网，没法自动取实时汇率，这里按你手动填的汇率换算。记账时会按当时的汇率把外币换算成人民币等值用于统计，改了汇率不会影响已经记过的账。"),
+          ...rows,
+          h("div", { class: "modal-actions" }, [
+            h("button", { class: "btn btn-ghost", type: "button", onClick: () => overlay.remove() }, "取消"),
+            h("button", {
+              class: "btn btn-primary", type: "button",
+              onClick: () => {
+                foreign.forEach((c) => store.setExchangeRate(c, inputs[c].value));
+                overlay.remove();
+                rerender();
+              },
+            }, "保存"),
+          ]),
+        ]),
+      ]);
+      overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+      document.body.appendChild(overlay);
     }
 
     function openManageCategories() {
@@ -115,7 +165,12 @@
               ...list.map((t) => h("div", { class: "list-row" }, [
                 h("span", { class: "badge" }, t.category),
                 h("span", {}, t.note || t.category),
-                h("span", { class: "spacer" }, `${t.type === "expense" ? "-" : "+"}${formatMoney(t.amount)}`),
+                h("span", { class: "spacer", style: "text-align:right;" }, [
+                  h("div", {}, `${t.type === "expense" ? "-" : "+"}${formatByCurrency(t.amount, t.currency)}`),
+                  t.currency !== "CNY"
+                    ? h("div", { class: "muted", style: "font-size:11px;" }, `≈${formatMoney(t.type === "expense" ? -t.amountCNY : t.amountCNY)}`)
+                    : null,
+                ]),
                 h("span", { class: "row-delete", onClick: () => { store.removeTransaction(t.id); rerender(); } }, "删除"),
               ])),
             ])
@@ -127,6 +182,7 @@
       h("button", { class: "btn", type: "button", onClick: () => { currentMonth = shiftMonth(currentMonth, -1); rerender(); } }, "‹ 上一月"),
       h("button", { class: "btn", type: "button", onClick: () => { currentMonth = shiftMonth(currentMonth, 1); rerender(); } }, "下一月 ›"),
       h("div", { class: "grow" }),
+      h("button", { class: "btn btn-outline", type: "button", onClick: openExchangeRateModal }, "汇率设置"),
       h("button", { class: "btn btn-outline", type: "button", onClick: openManageCategories }, "管理分类"),
       h("button", { class: "btn btn-primary", type: "button", onClick: openAddModal }, "+ 记一笔"),
     ]);

@@ -40,6 +40,9 @@
       shoppingListItems: [],
       financeTransactions: [],
       financeCategories: ["餐饮", "交通", "日用", "娱乐", "其他"],
+      // 汇率表：1 单位该货币 = 多少人民币。应用本身不联网（"离线可用"是硬性要求），拿不到实时汇率，
+      // 所以内置一份大致参考值，用户可以在"个人记账"里自己修改成当前的真实汇率。
+      financeExchangeRates: { CNY: 1, EUR: 7.8, USD: 7.1 },
       games: [],
       gameSessions: [],
       settings: {
@@ -564,18 +567,50 @@
     }
 
     // ---------- 个人记账 ----------
-    function addTransaction({ amount, type, category, date = todayStr(), note = "" }) {
-      const t = { id: uuid(), amount, type, category, date, note, createdAt: new Date().toISOString() };
+    const CURRENCIES = ["CNY", "EUR", "USD"];
+
+    /** 汇率表（1 单位该货币 = 多少人民币），供界面展示和手动修改。 */
+    function getExchangeRates() {
+      return { ...state.financeExchangeRates };
+    }
+    /** 修改一种货币对人民币的汇率（不能改人民币自己的 1:1）。 */
+    function setExchangeRate(currency, rate) {
+      if (currency === "CNY") return getExchangeRates();
+      const n = Number(rate);
+      if (!Number.isFinite(n) || n <= 0) return getExchangeRates();
+      state.financeExchangeRates = { ...state.financeExchangeRates, [currency]: n };
+      persist();
+      return getExchangeRates();
+    }
+    /** 按当前汇率表把一笔金额换算成人民币等值（用于汇总统计）。 */
+    function convertToCNY(amount, currency) {
+      const rate = state.financeExchangeRates[currency] ?? 1;
+      return Math.round(amount * rate * 100) / 100;
+    }
+
+    function addTransaction({ amount, currency = "CNY", type, category, date = todayStr(), note = "" }) {
+      const amountCNY = convertToCNY(amount, currency);
+      const t = { id: uuid(), amount, currency, amountCNY, type, category, date, note, createdAt: new Date().toISOString() };
       state.financeTransactions.push(t);
       persist();
       return t;
+    }
+    /** 修改一笔已有记录（金额/币种/分类/日期/备注等），不需要删除重新录入。金额或币种变了就重新按当前汇率换算成人民币等值。 */
+    function updateTransaction(id, patch) {
+      const t = state.financeTransactions.find((x) => x.id === id);
+      if (!t) return null;
+      Object.assign(t, patch);
+      if (!CURRENCIES.includes(t.currency)) t.currency = "CNY";
+      t.amountCNY = convertToCNY(t.amount, t.currency);
+      persist();
+      return { ...t };
     }
     function removeTransaction(id) {
       state.financeTransactions = state.financeTransactions.filter((t) => t.id !== id);
       persist();
     }
     function listTransactions({ month = null } = {}) {
-      const all = [...state.financeTransactions];
+      const all = state.financeTransactions.map((t) => ({ currency: "CNY", amountCNY: t.amount, ...t }));
       if (!month) return all;
       return all.filter((t) => t.date.startsWith(month)); // month: 'YYYY-MM'
     }
@@ -684,7 +719,8 @@
       setMealEntry, getMealEntry, listMealEntriesForWeek, copyWeek,
       addInventoryItem, updateInventoryItem, removeInventoryItem, listInventoryItems, isLowStock,
       addShoppingItem, removeShoppingItem, listShoppingItems, syncShoppingListFromLowStock,
-      addTransaction, removeTransaction, listTransactions, addCategory, removeCategory, listCategories,
+      addTransaction, updateTransaction, removeTransaction, listTransactions, addCategory, removeCategory, listCategories,
+      getExchangeRates, setExchangeRate, CURRENCIES,
       addGame, updateGame, removeGame, listGames, addPlaySession, listSessions, totalMinutesForGame,
       getSettings, updateHomeCardVisibility, setLastBackupAt,
       exportBackup, importBackup, resetAll,

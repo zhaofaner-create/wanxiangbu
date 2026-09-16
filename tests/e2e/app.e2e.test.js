@@ -348,6 +348,34 @@ describe("个人记账（PRD验收标准7）", () => {
     assert.match(await expenseCard.innerText(), /¥58/);
     await assert.doesNotReject(page.locator(".list-row", { hasText: "超市买菜" }).waitFor());
   });
+
+  test("多币种记账：改汇率后新记的欧元账会按新汇率换算成人民币计入月度汇总", async () => {
+    await goToModule(page, "个人记账");
+
+    await page.locator("button", { hasText: "+ 记一笔" }).click();
+    await fillModal(page, { type: "expense", amount: "58", category: "餐饮", date: "2026-09-16", note: "超市买菜" });
+    await submitModal(page);
+
+    await page.locator("button", { hasText: "汇率设置" }).click();
+    await page.locator(".modal-box").locator("input").first().fill("8"); // 第一行是欧元汇率
+    await page.locator(".modal-box button", { hasText: "保存" }).click();
+    await assert.doesNotReject(page.locator(".modal-overlay").waitFor({ state: "detached" }));
+
+    await page.locator("button", { hasText: "+ 记一笔" }).click();
+    await fillModal(page, { type: "expense", amount: "10", currency: "EUR", category: "餐饮", date: "2026-09-16", note: "巴黎买的面包" });
+    await submitModal(page);
+
+    // 流水行里应该同时看到原始的欧元金额和换算成人民币的等值。
+    const row = page.locator(".list-row", { hasText: "巴黎买的面包" });
+    await assert.doesNotReject(row.waitFor());
+    assert.match(await row.innerText(), /€10/);
+    assert.match(await row.innerText(), /≈-?¥80/);
+
+    // 月度支出汇总应该把之前记的58元人民币和这次的80元人民币等值加在一起。
+    const expenseCard = page.locator(".card", { hasText: "支出" }).first();
+    assert.match(await expenseCard.innerText(), /¥138/);
+    assert.deepEqual(networkViolations, []); // 全程没有为了"实时汇率"发起任何网络请求
+  });
 });
 
 describe("游戏娱乐（PRD验收标准8）", () => {
