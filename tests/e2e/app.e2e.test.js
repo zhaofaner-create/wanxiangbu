@@ -97,6 +97,38 @@ describe("今日计划", () => {
     assert.equal(await updatedBlock.locator(".check-row .badge").first().innerText(), "低");
     assert.match(await updatedBlock.innerText(), /已经抄送过了/);
   });
+
+  test("计时器：开始/暂停会累计用时并显示进度条，点完成后归档为已用时", async () => {
+    await goToModule(page, "今日计划");
+    await page.locator("button", { hasText: "+ 添加今日事项" }).click();
+    await fillModal(page, { text: "深度工作", estimatedMinutes: "1" });
+    await submitModal(page);
+
+    const block = page.locator(".check-row-block", { hasText: "深度工作" });
+    await assert.doesNotReject(block.waitFor());
+    await assert.doesNotReject(block.locator(".progress-bar").waitFor()); // 填了预计用时才会显示进度条
+
+    await block.locator("button", { hasText: "开始计时" }).click();
+    await assert.doesNotReject(block.locator("button", { hasText: "暂停" }).waitFor());
+    await new Promise((resolve) => setTimeout(resolve, 2200));
+    await block.locator("button", { hasText: "暂停" }).click();
+
+    const afterPause = await block.innerText();
+    const firstRun = Number((afterPause.match(/已用时 (\d+)秒/) || [])[1] || 0);
+    assert.ok(firstRun >= 1, `暂停后应该已经累计了至少1秒，实际读到：${afterPause}`);
+
+    // 恢复计时再跑一段，验证多次开始/暂停是累加而不是被清零
+    await block.locator("button", { hasText: "开始计时" }).click();
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    await block.locator("button", { hasText: "完成" }).click();
+
+    const doneBlock = page.locator(".check-row-block", { hasText: "深度工作" });
+    await assert.doesNotReject(doneBlock.locator(".check-row.done").waitFor());
+    assert.match(await doneBlock.innerText(), /用时/);
+    // 完成之后不应该再出现开始/暂停/完成这些操作按钮了
+    assert.equal(await doneBlock.locator("button", { hasText: "开始计时" }).count(), 0);
+    assert.equal(await doneBlock.locator("button", { hasText: "完成" }).count(), 0);
+  });
 });
 
 describe("学习任务 ↔ 今日计划 关联同步（PRD验收标准4）", () => {

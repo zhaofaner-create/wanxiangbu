@@ -1,4 +1,4 @@
-const { test, describe, beforeEach } = require("node:test");
+const { test, describe, beforeEach, after } = require("node:test");
 const assert = require("node:assert/strict");
 const { createStore } = require("../js/store.js");
 const { createMemoryStorage } = require("./helpers/memoryStorage.js");
@@ -150,6 +150,75 @@ describe("今日计划与关联同步（PRD验收标准4）", () => {
 
     const range = store.listTodayPlanRange("2026-09-14", "2026-09-20");
     assert.deepEqual(range.map((t) => t.text), ["周一的事", "周三上午", "周三下午"]);
+  });
+});
+
+describe("今日计划：计时器（开始/暂停/完成）", () => {
+  const realNow = Date.now;
+  let fakeNow;
+  function mockNow(ms) { fakeNow = ms; Date.now = () => fakeNow; }
+  function advance(ms) { fakeNow += ms; }
+
+  beforeEach(() => { mockNow(1_700_000_000_000); });
+  after(() => { Date.now = realNow; }); // 恢复真实的 Date.now，避免影响这个文件里其它的测试
+
+  test("开始计时后暂停，elapsedSeconds 按经过的时间累计", () => {
+    const item = store.addTodayPlanItem({ text: "写论文", date: "2026-09-16", estimatedMinutes: 30 });
+    const started = store.startTodayPlanTimer(item.id);
+    assert.ok(started.timerStartedAt);
+
+    advance(65_000); // 过了65秒
+    const paused = store.pauseTodayPlanTimer(item.id);
+    assert.equal(paused.timerStartedAt, null);
+    assert.equal(paused.elapsedSeconds, 65);
+  });
+
+  test("多次开始/暂停会累加，不会覆盖之前的用时", () => {
+    const item = store.addTodayPlanItem({ text: "复习", date: "2026-09-16" });
+    store.startTodayPlanTimer(item.id);
+    advance(30_000);
+    store.pauseTodayPlanTimer(item.id);
+    store.startTodayPlanTimer(item.id);
+    advance(40_000);
+    const paused = store.pauseTodayPlanTimer(item.id);
+    assert.equal(paused.elapsedSeconds, 70);
+  });
+
+  test("对不存在的id调用计时函数返回null，不抛错", () => {
+    assert.equal(store.startTodayPlanTimer("nope"), null);
+    assert.equal(store.pauseTodayPlanTimer("nope"), null);
+    assert.equal(store.finishTodayPlanItem("nope"), null);
+  });
+
+  test("finishTodayPlanItem：计时中直接点完成，会先累计用时再标记完成，且和学习任务的联动同样生效", () => {
+    const course = store.addCourse("宏观经济学");
+    const assignment = store.addAssignment({ courseId: course.id, title: "第五章作业", dueDate: "2026-09-20" });
+    const linked = store.linkAssignmentToToday(assignment.id, "2026-09-16");
+
+    store.startTodayPlanTimer(linked.id);
+    advance(120_000); // 2分钟
+
+    const finished = store.finishTodayPlanItem(linked.id);
+    assert.equal(finished.elapsedSeconds, 120);
+    assert.equal(finished.timerStartedAt, null);
+    assert.equal(finished.effectiveDone, true);
+
+    const updatedAssignment = store.listAssignments(course.id)[0];
+    assert.equal(updatedAssignment.status, "已完成"); // 联动没有被计时功能破坏
+
+    // 再点一次完成应该是幂等的，不会报错，也不会重复叠加副作用
+    const finishedAgain = store.finishTodayPlanItem(linked.id);
+    assert.equal(finishedAgain.effectiveDone, true);
+  });
+
+  test("已经暂停的情况下点完成，不会再多算时间", () => {
+    const item = store.addTodayPlanItem({ text: "看书", date: "2026-09-16" });
+    store.startTodayPlanTimer(item.id);
+    advance(50_000);
+    store.pauseTodayPlanTimer(item.id);
+    advance(999_000); // 暂停之后过了很久，不应该被算进去
+    const finished = store.finishTodayPlanItem(item.id);
+    assert.equal(finished.elapsedSeconds, 50);
   });
 });
 

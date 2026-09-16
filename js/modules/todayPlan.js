@@ -22,6 +22,21 @@
   const PRIORITY_BADGE_CLASS = { 高: "badge-warning", 中: "badge-info", 低: "" };
 
   let completedOpen = false;
+  let tickTimer = null;
+
+  /** 把秒数格式化成"12分34秒"这种展示形式；不到1分钟只显示秒数。 */
+  function formatElapsed(totalSeconds) {
+    const m = Math.floor(totalSeconds / 60);
+    const s = totalSeconds % 60;
+    if (m === 0) return `${s}秒`;
+    return s === 0 ? `${m}分钟` : `${m}分${s}秒`;
+  }
+
+  /** 计算某一项当前实际已用的秒数：已累计的 + 如果正在计时，加上这一段正在跑的时间。 */
+  function liveElapsedSeconds(item) {
+    const running = item.timerStartedAt ? Math.max(0, Math.round((Date.now() - item.timerStartedAt) / 1000)) : 0;
+    return (item.elapsedSeconds || 0) + running;
+  }
 
   function itemFormFields() {
     return [
@@ -132,6 +147,45 @@
       document.body.appendChild(overlay);
     }
 
+    function renderTimerWidget(item) {
+      if (item.effectiveDone) {
+        const elapsed = item.elapsedSeconds || 0;
+        return elapsed > 0
+          ? h("div", { class: "timer-widget muted", style: "font-size:12px;" }, `用时 ${formatElapsed(elapsed)}`)
+          : null;
+      }
+      const running = !!item.timerStartedAt;
+      const elapsed = liveElapsedSeconds(item);
+      const pct = item.estimatedMinutes ? Math.min(100, Math.round((elapsed / (item.estimatedMinutes * 60)) * 100)) : null;
+      return h("div", { class: "timer-widget" }, [
+        h("div", { class: "section-row", style: "gap:8px;" }, [
+          h("button", {
+            class: "btn btn-sm " + (running ? "btn-outline" : "btn-primary"),
+            type: "button",
+            onClick: () => {
+              if (running) store.pauseTodayPlanTimer(item.id);
+              else store.startTodayPlanTimer(item.id);
+              rerender();
+            },
+          }, running ? "暂停" : "开始计时"),
+          h("button", {
+            class: "btn btn-sm btn-outline",
+            type: "button",
+            onClick: () => {
+              const updated = store.finishTodayPlanItem(item.id);
+              if (updated && updated.effectiveDone) completedOpen = true;
+              rerender();
+            },
+          }, "完成"),
+          h("span", { class: "muted", style: "font-size:12px;" },
+            `已用时 ${formatElapsed(elapsed)}` + (item.estimatedMinutes ? ` / 预计 ${item.estimatedMinutes} 分钟` : "")),
+        ]),
+        item.estimatedMinutes
+          ? h("div", { class: "progress-bar" }, h("div", { class: "progress-bar-fill" + (pct >= 100 ? " over" : ""), style: `width:${pct}%;` }))
+          : null,
+      ]);
+    }
+
     function renderRow(item) {
       const metaBits = [];
       if (item.time) metaBits.push(item.time);
@@ -169,7 +223,25 @@
             },
           }, "删除"),
         ]),
+        renderTimerWidget(item),
         item.note ? h("div", { class: "muted", style: "font-size:12px;padding-left:28px;margin-top:-4px;" }, item.note) : null,
+      ]);
+    }
+
+    function renderTimelineCard() {
+      const timed = items.filter((i) => i.time).sort((a, b) => a.time.localeCompare(b.time));
+      const untimed = items.filter((i) => !i.time);
+      const ordered = [...timed, ...untimed];
+      return h("div", { class: "card" }, [
+        h("div", { class: "card-title" }, "今日时间线"),
+        ordered.length
+          ? h("div", { class: "timeline" }, ordered.map((item) => h("div", { class: "timeline-row" + (item.effectiveDone ? " done" : "") }, [
+              h("span", { class: "timeline-dot priority-" + (item.priority || "中") }),
+              h("span", { class: "timeline-time" }, item.time || "—"),
+              h("span", { class: "timeline-text" }, item.text),
+              h("span", { class: "badge " + PRIORITY_BADGE_CLASS[item.priority || "中"] }, item.priority || "中"),
+            ])))
+          : h("div", { class: "empty-hint" }, "今天还没有安排事项"),
       ]);
     }
 
@@ -193,9 +265,26 @@
 
     mount(container, h("div", { style: "display:flex;flex-direction:column;gap:14px;" }, [
       actions,
+      renderTimelineCard(),
       pendingCard,
       doneCard,
     ]));
+
+    // 有计时器在跑的时候，每秒刷新一次页面让"已用时"和进度条动起来；
+    // 一旦用户切到别的模块（contentEl 的 activeModuleId 变了），下一次 tick 就会自己停掉，
+    // 不会在看不见的页面里一直偷偷重新渲染。
+    if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
+    const anyRunning = items.some((i) => i.timerStartedAt);
+    if (anyRunning) {
+      tickTimer = setInterval(() => {
+        if (container.dataset.activeModuleId !== meta.id) {
+          clearInterval(tickTimer);
+          tickTimer = null;
+          return;
+        }
+        rerender();
+      }, 1000);
+    }
   }
 
   return { meta, render };

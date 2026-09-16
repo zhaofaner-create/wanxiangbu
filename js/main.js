@@ -52,6 +52,9 @@
     const mod = MODULES.find((m) => m.meta.id === id) || home;
     renderNav();
     renderTopbarActions();
+    // 标记当前活跃模块，供模块内部的计时器/轮询逻辑判断"用户是不是已经切换到别的页面了"，
+    // 避免离开今日计划/学习任务页面之后，之前设的定时器还在后台偷偷刷新一个已经看不到的页面。
+    contentEl.dataset.activeModuleId = mod.meta.id;
     mod.render(contentEl, store, { navigateTo, setTopbar });
   }
 

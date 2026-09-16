@@ -205,19 +205,65 @@
      * 从"未完成"变为"完成"时，如果这一项是关联进来的，同步把源记录（学习任务的作业/一次性提醒）也标记完成。
      * 从"完成"变为"未完成"时，只改这一项本身，不回退源记录的完成状态。
      */
+    /** 一项今日计划第一次变成"完成"时，顺带把它关联的源记录（作业/一次性提醒）也标记完成。 */
+    function applyTodayPlanDoneSideEffects(item) {
+      if (item.source === "study") {
+        const a = state.studyAssignments.find((x) => x.id === item.sourceId);
+        if (a) a.status = "已完成";
+      } else if (item.source === "reminder") {
+        const r = state.reminders.find((x) => x.id === item.sourceId);
+        if (r && r.repeat === "none") r.status = "done";
+      }
+    }
+
     function toggleTodayPlanDone(id) {
       const item = findTodayPlanItem(id);
       if (!item) return null;
       const wasDone = item.done;
       item.done = !item.done;
       if (!wasDone && item.done) {
-        if (item.source === "study") {
-          const a = state.studyAssignments.find((x) => x.id === item.sourceId);
-          if (a) a.status = "已完成";
-        } else if (item.source === "reminder") {
-          const r = state.reminders.find((x) => x.id === item.sourceId);
-          if (r && r.repeat === "none") r.status = "done";
-        }
+        applyTodayPlanDoneSideEffects(item);
+      }
+      persist();
+      return { ...item, effectiveDone: item.done || sourceIsComplete(item) };
+    }
+
+    /** 累计一段已经在跑的计时到 elapsedSeconds 里，并清空 timerStartedAt（暂停/完成时都要做这一步）。 */
+    function flushTodayPlanTimer(item) {
+      if (item.timerStartedAt) {
+        item.elapsedSeconds = (item.elapsedSeconds || 0) + Math.max(0, Math.round((Date.now() - item.timerStartedAt) / 1000));
+        item.timerStartedAt = null;
+      }
+    }
+
+    /** 开始（或继续）给一条今日计划计时。 */
+    function startTodayPlanTimer(id) {
+      const item = findTodayPlanItem(id);
+      if (!item) return null;
+      if (!item.timerStartedAt) {
+        item.timerStartedAt = Date.now();
+        persist();
+      }
+      return { ...item };
+    }
+
+    /** 暂停计时，把已经跑的这一段累计进 elapsedSeconds。 */
+    function pauseTodayPlanTimer(id) {
+      const item = findTodayPlanItem(id);
+      if (!item) return null;
+      flushTodayPlanTimer(item);
+      persist();
+      return { ...item };
+    }
+
+    /** 计时组件的"完成"按钮：先把正在跑的计时累计进去，再标记这一项完成（幂等，可重复调用）。 */
+    function finishTodayPlanItem(id) {
+      const item = findTodayPlanItem(id);
+      if (!item) return null;
+      flushTodayPlanTimer(item);
+      if (!item.done) {
+        item.done = true;
+        applyTodayPlanDoneSideEffects(item);
       }
       persist();
       return { ...item, effectiveDone: item.done || sourceIsComplete(item) };
@@ -563,6 +609,7 @@
       init, getState, persist,
       addQuickNote, removeQuickNote, listQuickNotes,
       addTodayPlanItem, toggleTodayPlanDone, removeTodayPlanItem, listTodayPlan, updateTodayPlanItem, listTodayPlanRange,
+      startTodayPlanTimer, pauseTodayPlanTimer, finishTodayPlanItem,
       linkAssignmentToToday, linkReminderToToday,
       addCourse, removeCourse, listCourses,
       addAssignment, updateAssignment, removeAssignment, listAssignments, listUpcomingAssignments,
