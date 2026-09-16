@@ -269,6 +269,15 @@
       return { ...item, effectiveDone: item.done || sourceIsComplete(item) };
     }
 
+    /** 给已完成的今日计划事项打一个满意度分（1-5星）；传 null 可以清掉。 */
+    function setTodayPlanSatisfaction(id, value) {
+      const item = findTodayPlanItem(id);
+      if (!item) return null;
+      item.satisfaction = value === null ? null : Math.min(5, Math.max(1, Math.round(Number(value))));
+      persist();
+      return { ...item };
+    }
+
     function removeTodayPlanItem(id) {
       state.todayPlan = state.todayPlan.filter((t) => t.id !== id);
       persist();
@@ -665,7 +674,7 @@
       init, getState, persist,
       addQuickNote, removeQuickNote, listQuickNotes,
       addTodayPlanItem, toggleTodayPlanDone, removeTodayPlanItem, listTodayPlan, updateTodayPlanItem, listTodayPlanRange,
-      startTodayPlanTimer, pauseTodayPlanTimer, finishTodayPlanItem,
+      startTodayPlanTimer, pauseTodayPlanTimer, finishTodayPlanItem, setTodayPlanSatisfaction,
       linkAssignmentToToday, linkReminderToToday,
       addCourse, removeCourse, listCourses,
       addAssignment, updateAssignment, removeAssignment, listAssignments, listUpcomingAssignments,

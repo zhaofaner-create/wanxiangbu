@@ -122,9 +122,16 @@ describe("今日计划", () => {
     await new Promise((resolve) => setTimeout(resolve, 1200));
     await block.locator("button", { hasText: "完成" }).click();
 
+    // 完成之后会弹出满意度打分弹窗，选一个星级
+    const satisfactionModal = page.locator(".modal-overlay", { hasText: "完成得怎么样" });
+    await assert.doesNotReject(satisfactionModal.waitFor());
+    await satisfactionModal.locator("button", { hasText: /^★{4}$/ }).click();
+    await assert.doesNotReject(satisfactionModal.waitFor({ state: "detached" }));
+
     const doneBlock = page.locator(".check-row-block", { hasText: "深度工作" });
     await assert.doesNotReject(doneBlock.locator(".check-row.done").waitFor());
     assert.match(await doneBlock.innerText(), /用时/);
+    assert.match(await doneBlock.innerText(), /★★★★☆/); // 4星：4个实心+1个空心
     // 完成之后不应该再出现开始/暂停/完成这些操作按钮了
     assert.equal(await doneBlock.locator("button", { hasText: "开始计时" }).count(), 0);
     assert.equal(await doneBlock.locator("button", { hasText: "完成" }).count(), 0);
@@ -157,6 +164,10 @@ describe("学习任务 ↔ 今日计划 关联同步（PRD验收标准4）", () 
     await assert.doesNotReject(todayRow.waitFor());
     assert.match(await todayRow.innerText(), /来自学习任务/);
     await todayRow.locator("input[type=checkbox]").click();
+
+    // 勾选完成会弹出满意度打分弹窗，这里先跳过，免得挡住后面的导航点击
+    await page.locator(".modal-overlay button", { hasText: "跳过" }).click();
+    await assert.doesNotReject(page.locator(".modal-overlay").waitFor({ state: "detached" }));
 
     await goToModule(page, "学习任务");
     const assignmentRowVisible = await page.locator(".assignment-list .list-row", { hasText: "第三章作业" }).count();

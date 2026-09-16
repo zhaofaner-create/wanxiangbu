@@ -38,6 +38,31 @@
     return (item.elapsedSeconds || 0) + running;
   }
 
+  /** 事项标记完成后弹出的满意度小弹窗（1-5星），可以直接点"跳过"不评分。 */
+  function openSatisfactionModal(store, item, rerender) {
+    const overlay = h("div", { class: "modal-overlay" }, [
+      h("div", { class: "modal-box" }, [
+        h("div", { class: "modal-title" }, `「${item.text}」完成得怎么样？`),
+        h("div", { class: "satisfaction-stars" }, [1, 2, 3, 4, 5].map((n) =>
+          h("button", {
+            class: "btn btn-sm btn-outline",
+            type: "button",
+            onClick: () => {
+              store.setTodayPlanSatisfaction(item.id, n);
+              overlay.remove();
+              rerender();
+            },
+          }, "★".repeat(n))
+        )),
+        h("div", { class: "modal-actions" }, [
+          h("button", { class: "btn btn-ghost", type: "button", onClick: () => overlay.remove() }, "跳过"),
+        ]),
+      ]),
+    ]);
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+    document.body.appendChild(overlay);
+  }
+
   function itemFormFields() {
     return [
       { name: "text", label: "事项内容", type: "text", required: true },
@@ -150,8 +175,11 @@
     function renderTimerWidget(item) {
       if (item.effectiveDone) {
         const elapsed = item.elapsedSeconds || 0;
-        return elapsed > 0
-          ? h("div", { class: "timer-widget muted", style: "font-size:12px;" }, `用时 ${formatElapsed(elapsed)}`)
+        const bits = [];
+        if (elapsed > 0) bits.push(`用时 ${formatElapsed(elapsed)}`);
+        if (item.satisfaction) bits.push("★".repeat(item.satisfaction) + "☆".repeat(5 - item.satisfaction));
+        return bits.length
+          ? h("div", { class: "timer-widget muted", style: "font-size:12px;" }, bits.join(" · "))
           : null;
       }
       const running = !!item.timerStartedAt;
@@ -172,8 +200,12 @@
             class: "btn btn-sm btn-outline",
             type: "button",
             onClick: () => {
+              const wasDone = item.effectiveDone;
               const updated = store.finishTodayPlanItem(item.id);
-              if (updated && updated.effectiveDone) completedOpen = true;
+              if (updated && updated.effectiveDone) {
+                completedOpen = true;
+                if (!wasDone) openSatisfactionModal(store, updated, rerender);
+              }
               rerender();
             },
           }, "完成"),
@@ -196,10 +228,14 @@
             type: "checkbox",
             checked: item.effectiveDone || undefined,
             onChange: () => {
+              const wasDone = item.effectiveDone;
               const updated = store.toggleTodayPlanDone(item.id);
               // 勾选完成后自动展开"已完成"区域，让用户能立刻看到这一项带删除线移动过去了，
               // 而不是勾选之后这一行凭空消失、看起来像没生效。
-              if (updated && updated.effectiveDone) completedOpen = true;
+              if (updated && updated.effectiveDone) {
+                completedOpen = true;
+                if (!wasDone) openSatisfactionModal(store, updated, rerender);
+              }
               rerender();
             },
           }),

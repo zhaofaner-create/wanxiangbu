@@ -220,6 +220,27 @@ describe("今日计划：计时器（开始/暂停/完成）", () => {
     const finished = store.finishTodayPlanItem(item.id);
     assert.equal(finished.elapsedSeconds, 50);
   });
+
+  test("setTodayPlanSatisfaction 保存1-5星满意度，超出范围会被夹到1-5之间，传null可以清除", () => {
+    const item = store.addTodayPlanItem({ text: "写周报", date: "2026-09-16" });
+    assert.equal(store.listTodayPlan("2026-09-16")[0].satisfaction, null); // 默认没有评分
+
+    let updated = store.setTodayPlanSatisfaction(item.id, 4);
+    assert.equal(updated.satisfaction, 4);
+
+    updated = store.setTodayPlanSatisfaction(item.id, 9); // 超出范围夹到5
+    assert.equal(updated.satisfaction, 5);
+
+    updated = store.setTodayPlanSatisfaction(item.id, 0); // 低于1夹到1
+    assert.equal(updated.satisfaction, 1);
+
+    updated = store.setTodayPlanSatisfaction(item.id, null);
+    assert.equal(updated.satisfaction, null);
+  });
+
+  test("对不存在的id调用setTodayPlanSatisfaction返回null", () => {
+    assert.equal(store.setTodayPlanSatisfaction("nope", 5), null);
+  });
 });
 
 describe("学习任务：课程与作业", () => {
