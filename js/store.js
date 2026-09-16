@@ -55,6 +55,7 @@
           games: true,
         },
         lastBackupAt: null,
+        lastManualSaveAt: null,
       },
     };
   }
@@ -678,6 +679,15 @@
       state.settings.lastBackupAt = iso;
       persist();
     }
+    /**
+     * 手动保存：平时每次增删改都会自动存进 localStorage，这个函数是给用户一个"我手动点了保存"的
+     * 确定感（也顺便再存一次，万一之前哪次自动保存因为某些原因没触发，这里能兜底）。
+     */
+    function manualSave() {
+      state.settings.lastManualSaveAt = new Date().toISOString();
+      persist();
+      return state.settings.lastManualSaveAt;
+    }
 
     // ---------- 备份 / 恢复 / 清空 ----------
     function exportBackup() {
@@ -722,7 +732,7 @@
       addTransaction, updateTransaction, removeTransaction, listTransactions, addCategory, removeCategory, listCategories,
       getExchangeRates, setExchangeRate, CURRENCIES,
       addGame, updateGame, removeGame, listGames, addPlaySession, listSessions, totalMinutesForGame,
-      getSettings, updateHomeCardVisibility, setLastBackupAt,
+      getSettings, updateHomeCardVisibility, setLastBackupAt, manualSave,
       exportBackup, importBackup, resetAll,
     };
   }

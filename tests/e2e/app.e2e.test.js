@@ -524,6 +524,26 @@ describe("数据与设置：导出备份 / 导入恢复（PRD验收标准10）",
   });
 });
 
+describe("数据与设置：手动保存", () => {
+  test("平时自动保存之外，也提供一个手动保存按钮，点了会记下保存时间", async () => {
+    await goToModule(page, "数据与设置");
+    const saveCard = page.locator(".card", { hasText: "手动保存" });
+    await assert.doesNotReject(saveCard.waitFor());
+    assert.match(await saveCard.innerText(), /还没有手动保存过/);
+
+    await saveCard.locator("button", { hasText: "立即保存" }).click();
+    assert.match(await saveCard.innerText(), /上次手动保存：/);
+    assert.doesNotMatch(await saveCard.innerText(), /还没有手动保存过/);
+
+    // 刷新页面后这个保存时间还在（是真的存进了 localStorage，不是只改了内存里的界面状态）。
+    await page.reload();
+    await page.waitForSelector(".nav-item");
+    await goToModule(page, "数据与设置");
+    assert.match(await page.locator(".card", { hasText: "手动保存" }).innerText(), /上次手动保存：/);
+    assert.deepEqual(networkViolations, []);
+  });
+});
+
 describe("离线可用（PRD验收标准1）", () => {
   test("整个测试过程中，浏览器没有对外发起任何 http(s) 网络请求", () => {
     assert.deepEqual(networkViolations, []);

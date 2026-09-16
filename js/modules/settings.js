@@ -68,6 +68,21 @@
     });
 
     const settings = store.getSettings();
+
+    function doManualSave() {
+      store.manualSave();
+      rerender();
+    }
+
+    const manualSaveCard = h("div", { class: "card" }, [
+      h("div", { class: "card-title" }, "手动保存"),
+      h("div", { class: "muted", style: "font-size:12px;margin-bottom:6px;" },
+        "平时改动都会自动保存，这个按钮是留给你想主动确认一下的时候用的。"),
+      h("div", { class: "muted", style: "font-size:12px;margin-bottom:14px;" },
+        settings.lastManualSaveAt ? `上次手动保存：${new Date(settings.lastManualSaveAt).toLocaleString("zh-CN")}` : "还没有手动保存过"),
+      h("button", { class: "btn btn-outline", type: "button", onClick: doManualSave }, "立即保存"),
+    ]);
+
     const backupCard = h("div", { class: "card" }, [
       h("div", { class: "card-title" }, "数据备份"),
       h("div", { class: "muted", style: "font-size:12px;margin-bottom:14px;" },
@@ -108,7 +123,7 @@
       }, "清空全部数据"),
     ]);
 
-    mount(container, h("div", { style: "display:flex;flex-direction:column;gap:16px;max-width:640px;" }, [backupCard, homeCardsCard, dangerCard]));
+    mount(container, h("div", { style: "display:flex;flex-direction:column;gap:16px;max-width:640px;" }, [manualSaveCard, backupCard, homeCardsCard, dangerCard]));
   }
 
   return { meta, render };

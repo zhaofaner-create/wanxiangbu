@@ -538,3 +538,21 @@ describe("设置：首页摘要卡片显示开关", () => {
     assert.equal(store.getSettings().homeCards.finance, true); // 其他开关不受影响
   });
 });
+
+describe("设置：手动保存", () => {
+  test("默认还没有手动保存过；调用后记录下保存时间", () => {
+    assert.equal(store.getSettings().lastManualSaveAt, null);
+    const before = Date.now();
+    const ts = store.manualSave();
+    assert.ok(ts);
+    assert.equal(store.getSettings().lastManualSaveAt, ts);
+    assert.ok(new Date(ts).getTime() >= before);
+  });
+
+  test("手动保存不影响其他数据（只是再存一次 + 记录时间）", () => {
+    store.addQuickNote("测试备忘");
+    store.manualSave();
+    assert.equal(store.listQuickNotes().length, 1);
+    assert.equal(store.listQuickNotes()[0].text, "测试备忘");
+  });
+});
