@@ -111,6 +111,14 @@ body {
 .timeline-time { width: 44px; flex-shrink: 0; color: #78716c; font-variant-numeric: tabular-nums; }
 .timeline-text { flex: 1; }
 
+/* 学习任务：作业/考试看板视图（拖拽改状态） */
+.kanban-board { display: flex; gap: 12px; align-items: flex-start; }
+.kanban-column { flex: 1; min-width: 0; background: #fafaf9; border: 1px solid #e7e5e4; border-radius: 8px; padding: 10px; min-height: 100px; }
+.kanban-column-title { font-size: 12px; font-weight: 600; color: #78716c; margin-bottom: 8px; }
+.kanban-column-body { display: flex; flex-direction: column; gap: 8px; }
+.kanban-card { background: #ffffff; border: 1px solid #e7e5e4; border-radius: 6px; padding: 8px 10px; cursor: grab; }
+.kanban-card:active { cursor: grabbing; }
+
 /* 折叠区域 */
 .collapsible-header { display: flex; justify-content: space-between; align-items: center; cursor: pointer; font-size: 13px; font-weight: 600; color: #78716c; }
 

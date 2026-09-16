@@ -198,6 +198,42 @@ describe("学习任务：学习目标计时 + 今日学习报告", () => {
   });
 });
 
+describe("学习任务：看板视图拖拽改状态", () => {
+  test("把卡片从'未开始'拖到'进行中'后，状态真的变了（列表视图的下拉框也会同步）", async () => {
+    await goToModule(page, "学习任务");
+    await page.locator("button", { hasText: "+ 添加课程" }).click();
+    await fillModal(page, { name: "考试准备" });
+    await submitModal(page);
+
+    await page.locator(".collapsible-header", { hasText: "考试准备" }).click();
+    await page.locator("button", { hasText: "+ 添加作业/考试" }).click();
+    await fillModal(page, { title: "期末考试", type: "考试", dueDate: "2026-12-20" });
+    await submitModal(page);
+
+    await page.locator(".tab-btn", { hasText: "看板视图" }).click();
+    const notStartedColumn = page.locator(".kanban-column", { hasText: "未开始" });
+    const inProgressColumn = page.locator(".kanban-column", { hasText: "进行中" });
+    const card = notStartedColumn.locator(".kanban-card", { hasText: "期末考试" });
+    await assert.doesNotReject(card.waitFor());
+
+    await card.dragTo(inProgressColumn);
+
+    await assert.doesNotReject(inProgressColumn.locator(".kanban-card", { hasText: "期末考试" }).waitFor());
+    assert.equal(await notStartedColumn.locator(".kanban-card", { hasText: "期末考试" }).count(), 0);
+
+    // 切回列表视图，确认下拉框里的状态也确实同步变成了"进行中"（拖拽和下拉框改的是同一个字段）
+    // 注意：课程卡片本来就还是展开状态（前面加作业时展开过，视图切换不会影响这个），
+    // 这里不需要再点一次折叠头，点了反而会把它重新收起来。
+    await page.locator(".tab-btn", { hasText: "列表视图" }).click();
+    const assignmentRow = page.locator(".assignment-list .list-row", { hasText: "期末考试" });
+    if ((await assignmentRow.count()) === 0) {
+      await page.locator(".collapsible-header", { hasText: "考试准备" }).click();
+    }
+    const statusValue = await page.locator(".assignment-list .list-row", { hasText: "期末考试" }).locator("select").inputValue();
+    assert.equal(statusValue, "进行中");
+  });
+});
+
 describe("提醒事项（PRD验收标准5）", () => {
   test("一次性提醒可以标记已处理；周期性提醒展示下一次日期", async () => {
     await goToModule(page, "提醒事项");

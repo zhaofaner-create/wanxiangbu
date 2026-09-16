@@ -21,6 +21,7 @@
   const meta = { id: "studyTasks", label: "学习任务", title: "学习任务", subtitle: "课程作业与学习目标" };
 
   let activeTab = "courses"; // 'courses' | 'goals'
+  let courseView = "list"; // 'list' | 'kanban'
   let expandedCourseId = null;
   let tickTimer = null;
 
@@ -44,9 +45,18 @@
       h("button", { class: "tab-btn" + (activeTab === "goals" ? " active" : ""), type: "button", onClick: () => { activeTab = "goals"; rerender(); } }, "学习目标"),
     ]);
 
+    const viewToggle = activeTab === "courses"
+      ? h("div", { class: "tabs" }, [
+          h("button", { class: "tab-btn" + (courseView === "list" ? " active" : ""), type: "button", onClick: () => { courseView = "list"; rerender(); } }, "列表视图"),
+          h("button", { class: "tab-btn" + (courseView === "kanban" ? " active" : ""), type: "button", onClick: () => { courseView = "kanban"; rerender(); } }, "看板视图"),
+        ])
+      : null;
+
     mount(container, h("div", { style: "display:flex;flex-direction:column;gap:16px;" }, [
-      h("div", { class: "section-row" }, [tabs, h("div", { class: "grow" }), activeTab === "courses" ? addCourseButton(store, rerender) : addGoalButton(store, rerender)]),
-      activeTab === "courses" ? renderCoursesTab(store, rerender) : renderGoalsTab(store, rerender),
+      h("div", { class: "section-row" }, [tabs, viewToggle, h("div", { class: "grow" }), activeTab === "courses" ? addCourseButton(store, rerender) : addGoalButton(store, rerender)]),
+      activeTab === "courses"
+        ? (courseView === "kanban" ? renderKanbanBoard(store, rerender) : renderCoursesTab(store, rerender))
+        : renderGoalsTab(store, rerender),
     ]));
 
     // 有学习目标在计时的时候，每秒刷新一次，让计时数字动起来；切走页面后下一次 tick 自动停掉。
@@ -103,6 +113,48 @@
     const courseCards = courses.map((course) => renderCourseCard(store, rerender, course));
 
     return h("div", { style: "display:flex;flex-direction:column;gap:14px;" }, [upcomingCard, ...courseCards]);
+  }
+
+  /**
+   * 看板视图：把所有课程的作业/考试按状态放进"未开始/进行中/已完成"三栏，
+   * 可以直接拖拽小卡片在栏目之间移动来改状态——适合考试、长期项目这种需要跟踪进度、
+   * 但不想每次都去下拉框里选状态的任务。拖拽和课程卡片里的下拉框改的是同一个 status 字段，
+   * 两种操作方式互不冲突，改哪边另一边都会同步。
+   */
+  function renderKanbanBoard(store, rerender) {
+    const courseById = Object.fromEntries(store.listCourses().map((c) => [c.id, c]));
+    const all = store.listAssignments();
+
+    const columns = STATUS_OPTIONS.map((status) => {
+      const cardsInColumn = all.filter((a) => a.status === status);
+      return h("div", {
+        class: "kanban-column",
+        onDragover: (e) => e.preventDefault(),
+        onDrop: (e) => {
+          e.preventDefault();
+          const id = e.dataTransfer.getData("text/plain");
+          if (id) {
+            store.updateAssignment(id, { status });
+            rerender();
+          }
+        },
+      }, [
+        h("div", { class: "kanban-column-title" }, `${status}（${cardsInColumn.length}）`),
+        h("div", { class: "kanban-column-body" }, cardsInColumn.length
+          ? cardsInColumn.map((a) => h("div", {
+              class: "kanban-card",
+              draggable: true,
+              onDragstart: (e) => { e.dataTransfer.setData("text/plain", a.id); e.dataTransfer.effectAllowed = "move"; },
+            }, [
+              h("div", { style: "font-weight:600;font-size:13px;" }, a.title),
+              h("div", { class: "muted", style: "font-size:11px;margin-top:4px;" },
+                `${courseById[a.courseId] ? courseById[a.courseId].name : ""} · ${formatDateDisplay(a.dueDate)}`),
+            ]))
+          : [h("div", { class: "empty-hint", style: "font-size:12px;padding:12px 0;" }, "拖到这里")]),
+      ]);
+    });
+
+    return h("div", { class: "kanban-board" }, columns);
   }
 
   function renderCourseCard(store, rerender, course) {
