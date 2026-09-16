@@ -178,6 +178,46 @@ describe("学习任务 ↔ 今日计划 关联同步（PRD验收标准4）", () 
     assert.equal(statusValue, "已完成");
     assert.deepEqual(networkViolations, []); // 全程也没有发起任何外部网络请求
   });
+
+  test("反过来：直接在学习任务里把作业状态改成已完成，今日计划里关联的那一项自动显示为已完成", async () => {
+    await goToModule(page, "学习任务");
+    await page.locator("button", { hasText: "+ 添加课程" }).click();
+    await fillModal(page, { name: "线性代数" });
+    await submitModal(page);
+
+    await page.locator(".collapsible-header", { hasText: "线性代数" }).click();
+    await page.locator("button", { hasText: "+ 添加作业/考试" }).click();
+    await fillModal(page, { title: "习题集第五章", type: "作业", dueDate: "2026-09-21" });
+    await submitModal(page);
+    await assert.doesNotReject(page.locator(".assignment-list .list-row", { hasText: "习题集第五章" }).waitFor());
+
+    await goToModule(page, "今日计划");
+    await page.locator("button", { hasText: "关联事项" }).click();
+    await page.locator(".modal-overlay .list-row", { hasText: "习题集第五章" }).locator("button").click();
+    await assert.doesNotReject(page.locator(".modal-overlay").waitFor({ state: "detached" }));
+
+    const todayRow = page.locator(".check-row", { hasText: "习题集第五章" });
+    await assert.doesNotReject(todayRow.waitFor());
+    // 这里还没有勾选，今日计划这一项自己的 done 仍是 false。
+
+    // 不在今日计划里操作，直接回到学习任务，用下拉框把作业状态改成"已完成"。
+    await goToModule(page, "学习任务");
+    await page.locator(".assignment-list .list-row", { hasText: "习题集第五章" }).locator("select").selectOption("已完成");
+
+    // 回到今日计划：这一项应该自动跟着变成"已完成"状态（勾上、划线），即使从没手动点过它的复选框。
+    // 它现在应该从"今天"待办列表里消失了（effectiveDone 让它归到已完成分组）。
+    await goToModule(page, "今日计划");
+    assert.equal(
+      await page.locator(".card", { hasText: /^今天/ }).locator(".check-row", { hasText: "习题集第五章" }).count(),
+      0
+    );
+    // "已完成"分组默认是折叠的，展开它才能看到这一项。
+    const doneHeader = page.locator(".collapsible-header", { hasText: "已完成" });
+    if (!/︿/.test(await doneHeader.innerText())) await doneHeader.click();
+    const syncedRow = page.locator(".check-row.done", { hasText: "习题集第五章" });
+    await assert.doesNotReject(syncedRow.waitFor());
+    assert.equal(await syncedRow.locator("input[type=checkbox]").isChecked(), true);
+  });
 });
 
 describe("学习任务：学习目标计时 + 今日学习报告", () => {
