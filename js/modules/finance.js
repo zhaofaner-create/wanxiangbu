@@ -62,6 +62,23 @@
       });
     }
 
+    /** 编辑一笔已有记录，不用删了重新录入。 */
+    function openEditModal(t) {
+      const categories = store.listCategories();
+      openFormModal({
+        title: "编辑记录",
+        submitLabel: "保存修改",
+        fields: transactionFields(categories),
+        initialValues: { type: t.type, amount: t.amount, currency: t.currency, category: t.category, date: t.date, note: t.note || "" },
+        onSubmit: (v) => {
+          store.updateTransaction(t.id, {
+            amount: v.amount, currency: v.currency || "CNY", type: v.type, category: v.category, date: v.date, note: v.note || "",
+          });
+          rerender();
+        },
+      });
+    }
+
     function openExchangeRateModal() {
       const rates = store.getExchangeRates();
       const foreign = store.CURRENCIES.filter((c) => c !== "CNY");
@@ -171,6 +188,7 @@
                     ? h("div", { class: "muted", style: "font-size:11px;" }, `≈${formatMoney(t.type === "expense" ? -t.amountCNY : t.amountCNY)}`)
                     : null,
                 ]),
+                h("span", { class: "row-edit", title: "编辑", onClick: () => openEditModal(t) }, "编辑"),
                 h("span", { class: "row-delete", onClick: () => { store.removeTransaction(t.id); rerender(); } }, "删除"),
               ])),
             ])

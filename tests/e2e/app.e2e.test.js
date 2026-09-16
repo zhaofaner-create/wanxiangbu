@@ -376,6 +376,34 @@ describe("个人记账（PRD验收标准7）", () => {
     assert.match(await expenseCard.innerText(), /¥138/);
     assert.deepEqual(networkViolations, []); // 全程没有为了"实时汇率"发起任何网络请求
   });
+
+  test("编辑一笔记录：不用删除重新录入，改完金额和分类后流水和汇总都跟着更新", async () => {
+    await goToModule(page, "个人记账");
+    await page.locator("button", { hasText: "+ 记一笔" }).click();
+    await fillModal(page, { type: "expense", amount: "58", category: "餐饮", date: "2026-09-16", note: "超市买菜" });
+    await submitModal(page);
+
+    const row = page.locator(".list-row", { hasText: "超市买菜" });
+    await assert.doesNotReject(row.waitFor());
+    await row.locator(".row-edit").click();
+
+    await assert.doesNotReject(page.locator(".modal-title", { hasText: "编辑记录" }).waitFor());
+    // 表单应该带出这笔记录原来的值。
+    assert.equal(await page.locator('.modal-box [name="amount"]').inputValue(), "58");
+    assert.equal(await page.locator('.modal-box [name="note"]').inputValue(), "超市买菜");
+
+    await fillModal(page, { amount: "88", category: "日用", note: "超市买菜和日用品" });
+    await page.locator(".modal-box button", { hasText: "保存修改" }).click();
+    await assert.doesNotReject(page.locator(".modal-overlay").waitFor({ state: "detached" }));
+
+    // 原来那一笔记录被就地改了，而不是变成了新的一行。
+    assert.equal(await page.locator(".list-row", { hasText: "超市买菜和日用品" }).count(), 1);
+    assert.equal(await page.locator(".list-row", { hasText: "超市买菜" }).count(), 1); // 备注是新文本的子串，只应该匹配到这一行
+    assert.match(await page.locator(".list-row", { hasText: "超市买菜和日用品" }).innerText(), /¥88/);
+
+    const expenseCard = page.locator(".card", { hasText: "支出" }).first();
+    assert.match(await expenseCard.innerText(), /¥88/); // 汇总也应该反映改后的88元，而不是原来的58元
+  });
 });
 
 describe("游戏娱乐（PRD验收标准8）", () => {
