@@ -272,6 +272,40 @@ describe("首页联动（PRD验收标准11）", () => {
   });
 });
 
+describe("首页：今日/本周/历史 计划切换视图", () => {
+  test("三个标签分别只显示对应时间范围内的事项", async () => {
+    await goToModule(page, "今日计划");
+
+    await page.locator("button", { hasText: "+ 添加今日事项" }).click();
+    await fillModal(page, { text: "今天要交的周报" });
+    await submitModal(page);
+
+    await page.locator("button", { hasText: "+ 添加今日事项" }).click();
+    await fillModal(page, { text: "本周晚些要做的事", date: "2026-09-18" });
+    await submitModal(page);
+
+    await page.locator("button", { hasText: "+ 添加今日事项" }).click();
+    await fillModal(page, { text: "上个月已经做过的事", date: "2026-08-20" });
+    await submitModal(page);
+
+    await goToModule(page, "首页总览");
+    const planCard = page.locator(".card", { hasText: "今日计划" }).first();
+
+    // 默认是"今日"标签，只应该看到今天的事项
+    await assert.doesNotReject(planCard.locator("text=今天要交的周报").waitFor());
+    assert.equal(await planCard.locator("text=本周晚些要做的事").count(), 0);
+    assert.equal(await planCard.locator("text=上个月已经做过的事").count(), 0);
+
+    await planCard.locator(".tab-btn", { hasText: "本周" }).click();
+    await assert.doesNotReject(planCard.locator("text=本周晚些要做的事").waitFor());
+    assert.equal(await planCard.locator("text=上个月已经做过的事").count(), 0);
+
+    await planCard.locator(".tab-btn", { hasText: "历史" }).click();
+    await assert.doesNotReject(planCard.locator("text=上个月已经做过的事").waitFor());
+    assert.equal(await planCard.locator("text=本周晚些要做的事").count(), 0);
+  });
+});
+
 describe("数据持久性（PRD验收标准3）", () => {
   test("刷新页面后数据仍在", async () => {
     await goToModule(page, "游戏娱乐");

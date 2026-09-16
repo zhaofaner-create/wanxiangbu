@@ -14,9 +14,18 @@
 
   const { h, mount, formatMoney } = require("../components/dom.js");
   const { homeSummary } = require("../derived.js");
-  const { todayStr, formatDateDisplay, weekdayLabel } = require("../utils.js");
+  const { todayStr, formatDateDisplay, weekdayLabel, startOfWeek, addDays } = require("../utils.js");
 
   const meta = { id: "home", label: "首页总览", title: "首页总览", subtitle: "" };
+
+  const PRIORITY_BADGE_CLASS = { 高: "badge-warning", 中: "badge-info", 低: "" };
+  const RANGE_TABS = [
+    { key: "today", label: "今日" },
+    { key: "week", label: "本周" },
+    { key: "history", label: "历史" },
+  ];
+
+  let activeRange = "today"; // 'today' | 'week' | 'history'
 
   function render(container, store, ctx) {
     meta.subtitle = `${formatDateDisplay(todayStr())} ${weekdayLabel(todayStr())}`;
@@ -29,17 +38,35 @@
       render(container, store, ctx);
     }
 
+    const today = todayStr();
+    const weekStart = startOfWeek(today);
+    const weekEnd = addDays(weekStart, 6);
+    const historyStart = addDays(today, -30);
+    const historyEnd = addDays(today, -1);
+    const rangeItems = activeRange === "today"
+      ? store.listTodayPlanRange(today, today)
+      : activeRange === "week"
+        ? store.listTodayPlanRange(weekStart, weekEnd)
+        : store.listTodayPlanRange(historyStart, historyEnd);
+
     const planCard = h("div", { class: "card" }, [
       h("div", { class: "card-title" }, [
         h("span", {}, "今日计划"),
         h("span", { class: "muted", style: "cursor:pointer;font-weight:400;", onClick: () => ctx.navigateTo("todayPlan") }, "查看全部 ›"),
       ]),
-      summary.todayPlan.length === 0
-        ? h("div", { class: "empty-hint" }, "今天还没有安排事项")
+      h("div", { class: "tabs", style: "margin-bottom:10px;" }, RANGE_TABS.map((t) =>
+        h("button", {
+          class: "tab-btn" + (activeRange === t.key ? " active" : ""),
+          type: "button",
+          onClick: () => { activeRange = t.key; rerender(); },
+        }, t.label)
+      )),
+      rangeItems.length === 0
+        ? h("div", { class: "empty-hint" }, activeRange === "history" ? "过去30天没有记录" : "没有安排事项")
         : h(
             "div",
             {},
-            summary.todayPlan.map((item) =>
+            rangeItems.map((item) =>
               h("label", { class: "check-row" + (item.effectiveDone ? " done" : "") }, [
                 h("input", {
                   type: "checkbox",
@@ -49,6 +76,8 @@
                     rerender();
                   },
                 }),
+                h("span", { class: "badge " + PRIORITY_BADGE_CLASS[item.priority || "中"] }, item.priority || "中"),
+                activeRange !== "today" ? h("span", { class: "muted", style: "font-size:11px;" }, formatDateDisplay(item.date)) : null,
                 h("span", {}, item.text),
                 item.source !== "manual"
                   ? h("span", { class: "badge spacer" }, item.source === "study" ? "来自学习任务" : "来自提醒事项")
