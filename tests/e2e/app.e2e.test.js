@@ -1,0 +1,272 @@
+// 真机端到端测试：用 Playwright 启动一个真实的无头 Chromium，直接打开 index.html
+// （file:// 协议，不经过任何服务器），像真人一样点按钮、填表单，验证界面和数据真的对得上。
+// 这一层覆盖的是 store.js/derived.js 单元测试覆盖不到的部分：DOM 渲染、事件绑定、跨模块页面跳转。
+import { test, describe, before, after, beforeEach, afterEach } from "node:test";
+import assert from "node:assert/strict";
+import { chromium } from "playwright";
+import { gotoApp, goToModule, fillModal, submitModal } from "./helpers.js";
+
+let browser;
+let context;
+let page;
+let networkViolations;
+
+before(async () => {
+  // --no-sandbox：这个沙箱容器没有普通用户命名空间权限，Chromium 默认沙箱模式起不来。
+  browser = await chromium.launch({ args: ["--no-sandbox"] });
+});
+
+after(async () => {
+  await browser.close();
+});
+
+beforeEach(async () => {
+  context = await browser.newContext({ acceptDownloads: true }); // 每个测试独立的存储分区，天然隔离 localStorage
+  page = await context.newPage();
+  networkViolations = await gotoApp(page);
+});
+
+afterEach(async () => {
+  await context.close();
+});
+
+describe("整体框架", () => {
+  test("加载后默认停在首页，导航栏有9个模块入口，且没有任何登录界面（PRD验收标准2：免登录）", async () => {
+    await assert.doesNotReject(page.waitForSelector(".topbar-title"));
+    const title = await page.locator("#topbar-title").innerText();
+    assert.equal(title, "首页总览");
+    const navCount = await page.locator(".nav-item").count();
+    assert.equal(navCount, 9);
+    assert.equal(await page.locator('input[type=password]').count(), 0);
+    assert.equal(await page.locator("text=登录").count(), 0);
+  });
+
+  test("点击导航能正确切换页面标题", async () => {
+    await goToModule(page, "个人记账");
+    assert.equal(await page.locator("#topbar-title").innerText(), "个人记账");
+    await goToModule(page, "游戏娱乐");
+    assert.equal(await page.locator("#topbar-title").innerText(), "游戏娱乐");
+  });
+});
+
+describe("快速备忘（PRD验收标准12：任意页面看到的都是同一份）", () => {
+  test("在首页添加的备忘，切换到其他模块页面仍能看到", async () => {
+    await page.locator(".quick-memo-btn").click();
+    await page.locator(".quick-memo-panel input[type=text]").fill("记得给护照续签预约");
+    await page.locator(".quick-memo-panel button", { hasText: "添加" }).click();
+    await assert.doesNotReject(page.locator(".quick-memo-item", { hasText: "记得给护照续签预约" }).waitFor());
+
+    await goToModule(page, "游戏娱乐");
+    await page.locator(".quick-memo-btn").click();
+    await assert.doesNotReject(page.locator(".quick-memo-item", { hasText: "记得给护照续签预约" }).waitFor());
+  });
+});
+
+describe("今日计划", () => {
+  test("手动添加事项并勾选完成", async () => {
+    await goToModule(page, "今日计划");
+    await page.locator("button", { hasText: "+ 添加今日事项" }).click();
+    await fillModal(page, { text: "去超市买米" });
+    await submitModal(page);
+
+    const row = page.locator(".check-row", { hasText: "去超市买米" });
+    await assert.doesNotReject(row.waitFor());
+    assert.equal(await row.evaluate((el) => el.classList.contains("done")), false);
+
+    await row.locator("input[type=checkbox]").click();
+    assert.equal(await row.evaluate((el) => el.classList.contains("done")), true);
+  });
+});
+
+describe("学习任务 ↔ 今日计划 关联同步（PRD验收标准4）", () => {
+  test("从今日计划关联一条作业并勾选完成，学习任务里的状态同步为已完成", async () => {
+    await goToModule(page, "学习任务");
+    await page.locator("button", { hasText: "+ 添加课程" }).click();
+    await fillModal(page, { name: "微观经济学" });
+    await submitModal(page);
+
+    await page.locator(".collapsible-header", { hasText: "微观经济学" }).click();
+    await page.locator("button", { hasText: "+ 添加作业/考试" }).click();
+    await fillModal(page, { title: "第三章作业", type: "作业", dueDate: "2026-09-20" });
+    await submitModal(page);
+    // 注意：这条作业同时会出现在"最近到期"提醒卡片和课程自己的作业列表里
+    // （两处都是有意的交叉展示，PRD要求首页/各模块能互相看到摘要），
+    // 所以这里要精确限定到课程作业列表里的那一行，避免匹配到两个同名节点。
+    await assert.doesNotReject(page.locator(".assignment-list .list-row", { hasText: "第三章作业" }).waitFor());
+
+    await goToModule(page, "今日计划");
+    await page.locator("button", { hasText: "关联事项" }).click();
+    // 点击"+"关联后，面板会自动关闭并刷新今日计划（不需要再手动点"关闭"）。
+    await page.locator(".modal-overlay .list-row", { hasText: "第三章作业" }).locator("button").click();
+    await assert.doesNotReject(page.locator(".modal-overlay").waitFor({ state: "detached" }));
+
+    const todayRow = page.locator(".check-row", { hasText: "第三章作业" });
+    await assert.doesNotReject(todayRow.waitFor());
+    assert.match(await todayRow.innerText(), /来自学习任务/);
+    await todayRow.locator("input[type=checkbox]").click();
+
+    await goToModule(page, "学习任务");
+    const assignmentRowVisible = await page.locator(".assignment-list .list-row", { hasText: "第三章作业" }).count();
+    if (assignmentRowVisible === 0) {
+      await page.locator(".collapsible-header", { hasText: "微观经济学" }).click();
+    }
+    const statusValue = await page.locator(".assignment-list .list-row", { hasText: "第三章作业" }).locator("select").inputValue();
+    assert.equal(statusValue, "已完成");
+    assert.deepEqual(networkViolations, []); // 全程也没有发起任何外部网络请求
+  });
+});
+
+describe("提醒事项（PRD验收标准5）", () => {
+  test("一次性提醒可以标记已处理；周期性提醒展示下一次日期", async () => {
+    await goToModule(page, "提醒事项");
+
+    await page.locator("button", { hasText: "+ 添加提醒" }).click();
+    await fillModal(page, { title: "缴手机话费", date: "2026-09-16", repeat: "none" });
+    await submitModal(page);
+    const oneTimeRow = page.locator(".list-row", { hasText: "缴手机话费" });
+    await assert.doesNotReject(oneTimeRow.waitFor());
+    await oneTimeRow.locator("button", { hasText: "标记已处理" }).click();
+    await assert.doesNotReject(page.locator(".collapsible-header", { hasText: "已处理" }).waitFor());
+
+    await page.locator("button", { hasText: "+ 添加提醒" }).click();
+    await fillModal(page, { title: "每月固定缴费", date: "2026-09-16", repeat: "monthly" });
+    await submitModal(page);
+    const monthlyRow = page.locator(".list-row", { hasText: "每月固定缴费" });
+    await assert.doesNotReject(monthlyRow.waitFor());
+    assert.match(await monthlyRow.innerText(), /下次：/);
+  });
+});
+
+describe("饮食计划（PRD验收标准9）", () => {
+  test("复制上周计划后，本周对应格子内容与上周一致", async () => {
+    await goToModule(page, "饮食计划");
+    await page.locator("button", { hasText: "‹ 上一周" }).click();
+
+    const lastWeekBreakfastMonday = page.locator("table.data-table tbody tr").first().locator("td.meal-cell").first();
+    await lastWeekBreakfastMonday.click();
+    await fillModal(page, { text: "豆浆油条" });
+    await submitModal(page);
+
+    await page.locator("button", { hasText: "下一周 ›" }).click();
+    await page.locator("button", { hasText: "复制上周计划" }).click();
+
+    const thisWeekBreakfastMonday = page.locator("table.data-table tbody tr").first().locator("td.meal-cell").first();
+    assert.equal((await thisWeekBreakfastMonday.innerText()).trim(), "豆浆油条");
+  });
+});
+
+describe("生活用品库存管理（PRD验收标准6）", () => {
+  test("数量低于阈值自动标记低库存，并自动出现在购物清单里", async () => {
+    await goToModule(page, "生活用品库存管理");
+    await page.locator("button", { hasText: "+ 添加物品" }).click();
+    await fillModal(page, { name: "纸巾", quantity: "2", unit: "包", lowThreshold: "3" });
+    await submitModal(page);
+
+    const row = page.locator("table.data-table tbody tr", { hasText: "纸巾" });
+    await assert.doesNotReject(row.locator(".badge-warning", { hasText: "低库存" }).waitFor());
+    await assert.doesNotReject(page.locator(".split-side .check-row", { hasText: "纸巾" }).waitFor());
+  });
+});
+
+describe("个人记账（PRD验收标准7）", () => {
+  test("记一笔支出后，月度支出汇总和流水列表都正确显示", async () => {
+    await goToModule(page, "个人记账");
+    await page.locator("button", { hasText: "+ 记一笔" }).click();
+    await fillModal(page, { type: "expense", amount: "58", category: "餐饮", date: "2026-09-16", note: "超市买菜" });
+    await submitModal(page);
+
+    const expenseCard = page.locator(".card", { hasText: "支出" }).first();
+    assert.match(await expenseCard.innerText(), /¥58/);
+    await assert.doesNotReject(page.locator(".list-row", { hasText: "超市买菜" }).waitFor());
+  });
+});
+
+describe("游戏娱乐（PRD验收标准8）", () => {
+  test("记录一次游玩后，累计时长正确显示", async () => {
+    await goToModule(page, "游戏娱乐");
+    await page.locator("button", { hasText: "+ 添加游戏" }).click();
+    await fillModal(page, { name: "塞尔达传说", status: "在玩" });
+    await submitModal(page);
+
+    await page.locator("button", { hasText: "记一次游玩" }).click();
+    await fillModal(page, { gameId: await page.locator(".modal-box select[name=gameId] option").first().getAttribute("value"), date: "2026-09-16", minutes: "90" });
+    await submitModal(page);
+
+    const card = page.locator(".summary-card, .card", { hasText: "塞尔达传说" }).first();
+    assert.match(await card.innerText(), /1 小时 30 分钟/);
+  });
+});
+
+describe("首页联动（PRD验收标准11）", () => {
+  test("在库存和游戏娱乐模块新增数据后，回到首页对应摘要卡片立即更新", async () => {
+    await goToModule(page, "生活用品库存管理");
+    await page.locator("button", { hasText: "+ 添加物品" }).click();
+    await fillModal(page, { name: "洗手液", quantity: "1", unit: "瓶", lowThreshold: "2" });
+    await submitModal(page);
+
+    await goToModule(page, "游戏娱乐");
+    await page.locator("button", { hasText: "+ 添加游戏" }).click();
+    await fillModal(page, { name: "动物森友会", status: "在玩" });
+    await submitModal(page);
+
+    await goToModule(page, "首页总览");
+    const inventoryCard = page.locator(".summary-card", { hasText: "生活用品库存" });
+    await assert.doesNotReject(inventoryCard.waitFor());
+    assert.match(await inventoryCard.innerText(), /1 件低库存/);
+
+    const gamesCard = page.locator(".summary-card", { hasText: "游戏娱乐" });
+    assert.match(await gamesCard.innerText(), /动物森友会/);
+  });
+});
+
+describe("数据持久性（PRD验收标准3）", () => {
+  test("刷新页面后数据仍在", async () => {
+    await goToModule(page, "游戏娱乐");
+    await page.locator("button", { hasText: "+ 添加游戏" }).click();
+    await fillModal(page, { name: "星露谷物语", status: "想玩" });
+    await submitModal(page);
+
+    await page.reload();
+    await page.waitForSelector(".nav-item");
+    await goToModule(page, "游戏娱乐");
+    await assert.doesNotReject(page.locator("text=星露谷物语").waitFor());
+  });
+});
+
+describe("数据与设置：导出备份 / 导入恢复（PRD验收标准10）", () => {
+  test("导出备份 -> 清空全部数据 -> 导入刚才的备份，数据完全恢复", async () => {
+    await goToModule(page, "今日计划");
+    await page.locator("button", { hasText: "+ 添加今日事项" }).click();
+    await fillModal(page, { text: "需要被备份的事项" });
+    await submitModal(page);
+
+    await goToModule(page, "数据与设置");
+    const [download] = await Promise.all([
+      page.waitForEvent("download"),
+      page.locator("button", { hasText: "导出备份" }).click(),
+    ]);
+    const backupPath = await download.path();
+    assert.ok(backupPath);
+
+    page.once("dialog", (d) => d.accept()); // 万一导入失败弹出的 alert，避免卡住测试
+    await page.locator("button", { hasText: "清空全部数据" }).click();
+    await page.locator(".modal-overlay button", { hasText: "清空全部数据" }).click();
+
+    await goToModule(page, "今日计划");
+    assert.equal(await page.locator(".check-row").count(), 0);
+
+    await goToModule(page, "数据与设置");
+    await page.locator('input[type=file]').setInputFiles(backupPath);
+    await page.locator(".modal-overlay button", { hasText: "覆盖导入" }).click();
+
+    await goToModule(page, "今日计划");
+    await assert.doesNotReject(page.locator(".check-row", { hasText: "需要被备份的事项" }).waitFor());
+    assert.deepEqual(networkViolations, []);
+  });
+});
+
+describe("离线可用（PRD验收标准1）", () => {
+  test("整个测试过程中，浏览器没有对外发起任何 http(s) 网络请求", () => {
+    assert.deepEqual(networkViolations, []);
+  });
+});

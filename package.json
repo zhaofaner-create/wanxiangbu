@@ -1,0 +1,10 @@
+{
+  "name": "faner-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "凡尔的APP — 个人工作生活管理网页应用（本地浏览器版，无构建步骤，仅用 Node 内置测试工具跑单元测试）。浏览器端用经典 <script> 标签加载（挂到 window.FanerApp 命名空间下），不用 ES Modules——因为 Chromium 直接双击打开 file:// 页面时会因 CORS 拒绝加载 <script type=module>，这是实测发现的问题，详见 README。",
+  "scripts": {
+    "test": "node --test"
+  },
+  "license": "UNLICENSED"
+}

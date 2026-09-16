@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>凡尔的APP</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <nav class="sidebar" id="sidebar">
+      <div class="sidebar-title">凡尔的APP</div>
+      <div class="nav-list" id="nav-list"></div>
+    </nav>
+    <div class="main-area">
+      <header class="topbar">
+        <div class="topbar-text">
+          <div class="topbar-title" id="topbar-title"></div>
+          <div class="topbar-subtitle" id="topbar-subtitle"></div>
+        </div>
+        <div class="topbar-actions" id="topbar-actions"></div>
+      </header>
+      <main class="content-area" id="content-area"></main>
+    </div>
+  </div>
+  <script>
+    // 经典 <script> 加载的模块命名空间垫片：所有 js/*.js 文件都以
+    // window.FanerApp.<名字> 的形式挂载，这里模拟一个极简的 require()，
+    // 让每个文件都能写成"看起来像 CommonJS"的写法（同一份源码在 Node
+    // 测试里用真正的 require，在浏览器里用这个垫片，两边逻辑保证一致）。
+    // 之所以不用 <script type="module">：Chromium 在 file:// 协议下
+    // 会因为 CORS 策略直接拒绝加载 ES Module 脚本，双击打开 index.html
+    // 时页面会整个空白——这是本项目最核心的使用场景，因此改用经典脚本。
+    window.FanerApp = window.FanerApp || {};
+    window.__fanerRequire = function (path) {
+      var name = path.replace(/^.*\//, "").replace(/\.js$/, "");
+      var ns = window.FanerApp[name];
+      if (!ns) {
+        throw new Error("FanerApp module not loaded yet: " + name + " (required from " + path + ")");
+      }
+      return ns;
+    };
+  </script>
+  <script src="js/utils.js"></script>
+  <script src="js/store.js"></script>
+  <script src="js/derived.js"></script>
+  <script src="js/components/dom.js"></script>
+  <script src="js/components/modal.js"></script>
+  <script src="js/components/confirm.js"></script>
+  <script src="js/components/quickMemo.js"></script>
+  <script src="js/modules/home.js"></script>
+  <script src="js/modules/todayPlan.js"></script>
+  <script src="js/modules/studyTasks.js"></script>
+  <script src="js/modules/reminders.js"></script>
+  <script src="js/modules/mealPlan.js"></script>
+  <script src="js/modules/inventory.js"></script>
+  <script src="js/modules/finance.js"></script>
+  <script src="js/modules/games.js"></script>
+  <script src="js/modules/settings.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>
