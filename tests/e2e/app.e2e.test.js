@@ -433,6 +433,60 @@ describe("生活用品库存管理（PRD验收标准6）", () => {
   });
 });
 
+describe("库存管理：购物清单勾选自动更新库存 + 消耗趋势（开发计划第一版暂缓功能之一）", () => {
+  test("购物清单点「买到了」并填购买数量后，库存数量自动增加，条目从清单消失", async () => {
+    await goToModule(page, "库存管理");
+    await page.locator("button", { hasText: "+ 添加物品" }).click();
+    await fillModal(page, { name: "纸巾", quantity: "1", unit: "包", lowThreshold: "3" });
+    await submitModal(page);
+
+    const shoppingRow = page.locator(".split-side .check-row", { hasText: "纸巾" });
+    await assert.doesNotReject(shoppingRow.waitFor());
+    await shoppingRow.locator("button", { hasText: "买到了" }).click();
+    await fillModal(page, { quantity: "5" });
+    await submitModal(page);
+
+    // 购物清单里这一条消失了
+    assert.equal(await page.locator(".split-side .check-row", { hasText: "纸巾" }).count(), 0);
+    // 库存数量变成 1 + 5 = 6
+    const invRow = page.locator("table.data-table tbody tr", { hasText: "纸巾" });
+    assert.match(await invRow.innerText(), /6 包/);
+  });
+
+  test("记一次消耗后，库存数量减少，且「消耗趋势」出现这个物品", async () => {
+    await goToModule(page, "库存管理");
+    await page.locator("button", { hasText: "+ 添加物品" }).click();
+    await fillModal(page, { name: "洗手液", quantity: "5", unit: "瓶", lowThreshold: "0" });
+    await submitModal(page);
+
+    const invRow = page.locator("table.data-table tbody tr", { hasText: "洗手液" });
+    await invRow.locator("span", { hasText: "记一次消耗" }).click();
+    await fillModal(page, { amount: "2" });
+    await submitModal(page);
+
+    assert.match(await invRow.innerText(), /3 瓶/); // 5 - 2 = 3
+
+    const trendCard = page.locator(".card", { hasText: "消耗趋势" });
+    await assert.doesNotReject(trendCard.waitFor());
+    assert.match(await trendCard.innerText(), /洗手液/);
+    assert.match(await trendCard.innerText(), /2瓶/);
+  });
+
+  test("购物清单点「移除」不会影响库存数量（和「买到了」是两种不同的操作）", async () => {
+    await goToModule(page, "库存管理");
+    await page.locator("button", { hasText: "+ 添加物品" }).click();
+    await fillModal(page, { name: "洗衣液", quantity: "1", unit: "瓶", lowThreshold: "3" });
+    await submitModal(page);
+
+    const shoppingRow = page.locator(".split-side .check-row", { hasText: "洗衣液" });
+    await shoppingRow.locator("span", { hasText: "移除" }).click();
+
+    assert.equal(await page.locator(".split-side .check-row", { hasText: "洗衣液" }).count(), 0);
+    const invRow = page.locator("table.data-table tbody tr", { hasText: "洗衣液" });
+    assert.match(await invRow.innerText(), /1 瓶/); // 数量没变
+  });
+});
+
 describe("个人记账（PRD验收标准7）", () => {
   test("记一笔支出后，月度支出汇总和流水列表都正确显示", async () => {
     await goToModule(page, "个人记账");

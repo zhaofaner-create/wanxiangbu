@@ -584,6 +584,87 @@ describe("生活用品库存管理（PRD验收标准6）", () => {
   });
 });
 
+describe("库存管理：购物清单勾选自动更新库存 + 消耗趋势（开发计划第一版暂缓功能之一）", () => {
+  test("resolveShoppingItem：勾选低库存自动生成的条目，买到的数量会加回库存，条目从购物清单消失", () => {
+    const item = store.addInventoryItem({ name: "纸巾", quantity: 1, unit: "包", lowThreshold: 3 });
+    const [shoppingEntry] = store.listShoppingItems();
+    store.resolveShoppingItem(shoppingEntry.id, 5);
+    assert.equal(store.listInventoryItems().find((i) => i.id === item.id).quantity, 6); // 1 + 5
+    assert.equal(store.listShoppingItems().length, 0);
+  });
+
+  test("resolveShoppingItem：手动添加、没有linkedItemId的条目，按名字匹配现有库存物品", () => {
+    const item = store.addInventoryItem({ name: "酱油", quantity: 1, unit: "瓶", lowThreshold: 0 }); // 1 > 0，不是低库存，不会自动进购物清单
+    assert.equal(store.listShoppingItems().length, 0);
+    const manualEntry = store.addShoppingItem({ name: "酱油" });
+    store.resolveShoppingItem(manualEntry.id, 2);
+    assert.equal(store.listInventoryItems().find((i) => i.id === item.id).quantity, 3); // 1 + 2
+  });
+
+  test("resolveShoppingItem：名字在库存里完全找不到匹配时，会新建一个库存物品，不会丢失这次购买的数据", () => {
+    const entry = store.addShoppingItem({ name: "新买的削皮器" });
+    store.resolveShoppingItem(entry.id, 1);
+    const created = store.listInventoryItems().find((i) => i.name === "新买的削皮器");
+    assert.ok(created);
+    assert.equal(created.quantity, 1);
+  });
+
+  test("resolveShoppingItem：不传购买数量时，优先用条目自带的建议数量（比如菜谱汇总的用量），没有就默认1", () => {
+    const withSuggestion = store.addRecipe({ name: "菜A", ingredients: [{ name: "胡萝卜", quantity: 3, unit: "根" }] });
+    store.setMealEntryFromRecipe("2026-09-14", "lunch", withSuggestion.id);
+    store.generateShoppingListFromMealPlan("2026-09-14");
+    const carrotEntry = store.listShoppingItems().find((s) => s.name === "胡萝卜");
+    store.resolveShoppingItem(carrotEntry.id); // 不传数量
+    const created = store.listInventoryItems().find((i) => i.name === "胡萝卜");
+    assert.equal(created.quantity, 3); // 用了建议数量3，而不是默认的1
+
+    const plainEntry = store.addShoppingItem({ name: "普通条目" });
+    store.resolveShoppingItem(plainEntry.id); // 没有建议数量，也不传，默认按1
+    assert.equal(store.listInventoryItems().find((i) => i.name === "普通条目").quantity, 1);
+  });
+
+  test("recordConsumption：消耗会扣减库存数量，且不会扣成负数", () => {
+    const item = store.addInventoryItem({ name: "洗手液", quantity: 3, unit: "瓶", lowThreshold: 0 });
+    const updated = store.recordConsumption(item.id, 2, "2026-09-16");
+    assert.equal(updated.quantity, 1);
+    const overConsumed = store.recordConsumption(item.id, 10, "2026-09-16");
+    assert.equal(overConsumed.quantity, 0); // 不会变成负数
+  });
+
+  test("recordConsumption：消耗到低于阈值会自动触发低库存、补进购物清单", () => {
+    const item = store.addInventoryItem({ name: "牙膏", quantity: 3, unit: "支", lowThreshold: 1 });
+    assert.equal(store.listShoppingItems().length, 0);
+    store.recordConsumption(item.id, 3, "2026-09-16");
+    assert.equal(store.listShoppingItems().length, 1);
+  });
+
+  test("recordConsumption：对不存在的物品id返回null，不抛错", () => {
+    assert.equal(store.recordConsumption("nope", 1), null);
+  });
+
+  test("listTopConsumedItems：按累计消耗量从高到低排序，只统计指定天数范围内的记录", () => {
+    const a = store.addInventoryItem({ name: "牛奶", quantity: 20, unit: "盒", lowThreshold: 0 });
+    const b = store.addInventoryItem({ name: "鸡蛋", quantity: 30, unit: "个", lowThreshold: 0 });
+    store.recordConsumption(a.id, 5, "2026-09-16");
+    store.recordConsumption(b.id, 8, "2026-09-15");
+    store.recordConsumption(b.id, 2, "2026-08-01"); // 超出30天范围，不应计入
+
+    const top = store.listTopConsumedItems(30, "2026-09-16");
+    assert.equal(top.length, 2);
+    assert.equal(top[0].name, "鸡蛋"); // 8 > 5
+    assert.equal(top[0].totalAmount, 8); // 只统计范围内的那一次，不含8月那次
+    assert.equal(top[1].name, "牛奶");
+  });
+
+  test("listTopConsumedItems：物品被删除后，历史消耗记录仍然保留在排行榜里（用记消耗时的名字快照）", () => {
+    const item = store.addInventoryItem({ name: "临时物品", quantity: 5, unit: "个", lowThreshold: 0 });
+    store.recordConsumption(item.id, 2, "2026-09-16");
+    store.removeInventoryItem(item.id);
+    const top = store.listTopConsumedItems(30, "2026-09-16");
+    assert.equal(top.find((t) => t.name === "临时物品").totalAmount, 2);
+  });
+});
+
 describe("个人记账（PRD验收标准7）", () => {
   test("按月过滤流水，月度收支结余计算准确", () => {
     store.addTransaction({ amount: 58, type: "expense", category: "餐饮", date: "2026-09-16" });

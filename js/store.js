@@ -46,6 +46,9 @@
       recipes: [],
       inventoryItems: [],
       shoppingListItems: [],
+      // 库存消耗记录：每次"记一次消耗"都会往这里追加一条，供"消耗趋势"统计用。
+      // 同样是后加字段，不进 isValidDataShape 的 required。
+      inventoryConsumptionLog: [],
       financeTransactions: [],
       financeCategories: ["餐饮", "交通", "日用", "娱乐", "其他"],
       // 汇率表：1 单位该货币 = 多少人民币。应用本身不联网（"离线可用"是硬性要求），拿不到实时汇率，
@@ -735,6 +738,72 @@
       persist();
     }
 
+    /**
+     * 购物清单勾选"买到了"：自动把买到的数量加回对应的库存物品，然后把这一条从购物清单里移除
+     * ——不再需要买完东西之后又手动去库存管理页把数量改回去。
+     * - 优先用购物清单条目自带的 linkedItemId（低库存自动生成的条目都有）找库存物品；
+     *   没有的话（比如菜谱自动生成购物清单时是按食材名字生成的，没有关联具体库存物品）
+     *   退而求其次按名字精确匹配一个现有库存物品。
+     * - 两种都找不到、但确实买了东西：直接新建一个库存物品（数量就是这次买的量，
+     *   阈值先给0，用户自己后面可以再调），而不是让这份数据凭空消失。
+     * - purchasedQuantity 不传的话，优先用购物清单条目自己带的建议数量（比如菜谱汇总出来的食材用量），
+     *   再没有就默认按1份算。
+     */
+    function resolveShoppingItem(id, purchasedQuantity) {
+      const s = state.shoppingListItems.find((x) => x.id === id);
+      if (!s) return null;
+      const qty = purchasedQuantity != null ? Number(purchasedQuantity) : (s.quantity != null ? Number(s.quantity) : 1);
+      const safeQty = Number.isFinite(qty) ? qty : 0;
+
+      let item = s.linkedItemId ? state.inventoryItems.find((x) => x.id === s.linkedItemId) : null;
+      if (!item) {
+        item = state.inventoryItems.find((x) => x.name.trim() === s.name.trim()) || null;
+      }
+      if (item) {
+        item.quantity = Math.round((item.quantity + safeQty) * 100) / 100;
+      } else if (safeQty > 0) {
+        item = addInventoryItem({ name: s.name, quantity: safeQty, unit: s.unit || "", lowThreshold: 0 });
+      }
+      state.shoppingListItems = state.shoppingListItems.filter((x) => x.id !== id);
+      persist();
+      return item ? { ...item } : null;
+    }
+
+    /**
+     * 记一次"消耗"（用掉了多少），和"编辑库存数量"是两回事：编辑数量是纠正/校准，
+     * 记消耗是真实发生的一次用量，会累加进 inventoryConsumptionLog，供"消耗趋势"统计。
+     * 消耗后库存不会变成负数；如果因此变成低库存，会照常自动补进购物清单。
+     */
+    function recordConsumption(itemId, amount, refDate = todayStr()) {
+      const item = state.inventoryItems.find((x) => x.id === itemId);
+      if (!item) return null;
+      const amt = Math.max(0, Number(amount) || 0);
+      if (amt > 0) {
+        item.quantity = Math.max(0, Math.round((item.quantity - amt) * 100) / 100);
+        state.inventoryConsumptionLog.push({ id: uuid(), itemId, name: item.name, unit: item.unit, amount: amt, date: refDate });
+        persist();
+        syncShoppingListFromLowStock();
+      }
+      return { ...item };
+    }
+
+    /**
+     * 最近 days 天里消耗最多的物品排行（用于"消耗趋势"），按累计消耗量从高到低排序。
+     * name 用的是记消耗那一刻的物品名字快照，就算后来这个库存物品被删除了，排行榜里
+     * 还是能看到历史上确实消耗过它，不会因为物品被删就把这段历史也一起丢掉。
+     */
+    function listTopConsumedItems(days = 30, refDate = todayStr(), limit = 5) {
+      const cutoff = addDays(refDate, -(days - 1));
+      const totals = new Map();
+      state.inventoryConsumptionLog.forEach((log) => {
+        if (log.date < cutoff || log.date > refDate) return;
+        const cur = totals.get(log.itemId) || { itemId: log.itemId, name: log.name, unit: log.unit || "", totalAmount: 0 };
+        cur.totalAmount = Math.round((cur.totalAmount + log.amount) * 100) / 100;
+        totals.set(log.itemId, cur);
+      });
+      return [...totals.values()].sort((a, b) => b.totalAmount - a.totalAmount).slice(0, limit);
+    }
+
     // ---------- 个人记账 ----------
     const CURRENCIES = ["CNY", "EUR", "USD"];
 
@@ -900,6 +969,7 @@
       generateShoppingListFromMealPlan,
       addInventoryItem, updateInventoryItem, removeInventoryItem, listInventoryItems, isLowStock,
       addShoppingItem, removeShoppingItem, listShoppingItems, syncShoppingListFromLowStock,
+      resolveShoppingItem, recordConsumption, listTopConsumedItems,
       addTransaction, updateTransaction, removeTransaction, listTransactions, addCategory, removeCategory, listCategories,
       getExchangeRates, setExchangeRate, CURRENCIES,
       addGame, updateGame, removeGame, listGames, addPlaySession, listSessions, totalMinutesForGame,
