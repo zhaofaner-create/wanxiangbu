@@ -17,7 +17,7 @@
   const { openConfirm } = require("../components/confirm.js");
   const { isWithinDays, formatDateDisplay } = require("../utils.js");
 
-  const meta = { id: "inventory", label: "生活用品库存管理", title: "生活用品库存管理", subtitle: "数量 · 低库存 · 保质期 · 购物清单" };
+  const meta = { id: "inventory", label: "库存管理", title: "库存管理", subtitle: "生活用品数量 · 低库存 · 保质期 · 购物清单" };
 
   function render(container, store, ctx) {
     ctx.setTopbar(meta.title, meta.subtitle);

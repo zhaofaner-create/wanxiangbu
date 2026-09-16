@@ -47,6 +47,30 @@ describe("整体框架", () => {
     await goToModule(page, "游戏娱乐");
     assert.equal(await page.locator("#topbar-title").innerText(), "游戏娱乐");
   });
+
+  test("侧边导航按'日常/学习/生活/系统'分组显示，每一项前面都有图标", async () => {
+    const groups = page.locator(".nav-group");
+    assert.equal(await groups.count(), 4);
+
+    const expected = {
+      "日常": ["首页总览", "今日计划"],
+      "学习": ["学习任务", "提醒事项"],
+      "生活": ["饮食计划", "库存管理", "个人记账", "游戏娱乐"],
+      "系统": ["数据与设置"],
+    };
+    for (let i = 0; i < 4; i++) {
+      const group = groups.nth(i);
+      const groupTitle = await group.locator(".nav-group-title").innerText();
+      assert.ok(expected[groupTitle], `出现了没预期到的分组：${groupTitle}`);
+      const items = group.locator(".nav-item");
+      assert.equal(await items.count(), expected[groupTitle].length);
+      for (let j = 0; j < expected[groupTitle].length; j++) {
+        assert.equal(await items.nth(j).innerText(), expected[groupTitle][j]);
+        // 每一项都应该带一个图标，不是光秃秃的文字。
+        assert.equal(await items.nth(j).locator("svg.nav-icon").count(), 1);
+      }
+    }
+  });
 });
 
 describe("快速备忘（PRD验收标准12：任意页面看到的都是同一份）", () => {
@@ -326,7 +350,7 @@ describe("饮食计划（PRD验收标准9）", () => {
 
 describe("生活用品库存管理（PRD验收标准6）", () => {
   test("数量低于阈值自动标记低库存，并自动出现在购物清单里", async () => {
-    await goToModule(page, "生活用品库存管理");
+    await goToModule(page, "库存管理");
     await page.locator("button", { hasText: "+ 添加物品" }).click();
     await fillModal(page, { name: "纸巾", quantity: "2", unit: "包", lowThreshold: "3" });
     await submitModal(page);
@@ -424,7 +448,7 @@ describe("游戏娱乐（PRD验收标准8）", () => {
 
 describe("首页联动（PRD验收标准11）", () => {
   test("在库存和游戏娱乐模块新增数据后，回到首页对应摘要卡片立即更新", async () => {
-    await goToModule(page, "生活用品库存管理");
+    await goToModule(page, "库存管理");
     await page.locator("button", { hasText: "+ 添加物品" }).click();
     await fillModal(page, { name: "洗手液", quantity: "1", unit: "瓶", lowThreshold: "2" });
     await submitModal(page);
@@ -435,7 +459,7 @@ describe("首页联动（PRD验收标准11）", () => {
     await submitModal(page);
 
     await goToModule(page, "首页总览");
-    const inventoryCard = page.locator(".summary-card", { hasText: "生活用品库存" });
+    const inventoryCard = page.locator(".summary-card", { hasText: "库存管理" });
     await assert.doesNotReject(inventoryCard.waitFor());
     assert.match(await inventoryCard.innerText(), /1 件低库存/);
 

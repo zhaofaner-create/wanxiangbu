@@ -1,3 +1,12 @@
+:root {
+  /* 主题色：全站按钮高亮、导航选中态、进度条等都从这几个变量取色，
+     调整这里就能统一换肤，不用满页面改十六进制值。 */
+  --accent: #4f46e5;
+  --accent-dark: #4338ca;
+  --accent-soft: #eef2ff;
+  --accent-soft-text: #4338ca;
+}
+
 * { box-sizing: border-box; }
 html, body { height: 100%; }
 body {
@@ -19,17 +28,23 @@ body {
   overflow-y: auto;
 }
 .sidebar-title { padding: 0 20px 22px 20px; font-size: 15px; font-weight: 700; color: #171717; }
-.nav-list { display: flex; flex-direction: column; gap: 2px; }
+.nav-list { display: flex; flex-direction: column; gap: 18px; }
+.nav-group { display: flex; flex-direction: column; gap: 2px; }
+.nav-group-title {
+  padding: 0 20px; margin-bottom: 4px;
+  font-size: 11px; font-weight: 700; letter-spacing: 0.06em; color: #a8a29e;
+}
 .nav-item {
   display: flex; align-items: center; gap: 10px;
-  padding: 10px 20px; font-size: 14px; color: #57534e;
-  cursor: pointer; border: none; background: none; text-align: left; width: 100%;
+  padding: 9px 20px; font-size: 14px; color: #57534e;
+  cursor: pointer; border: none; border-left: 2px solid transparent; background: none; text-align: left; width: 100%;
   font-family: inherit;
 }
-.nav-item:hover { background: #fafaf9; }
-.nav-item.active { background: #f4f4f5; font-weight: 600; color: #18181b; }
-.nav-dot { width: 6px; height: 6px; border-radius: 50%; background: #d6d3d1; flex-shrink: 0; }
-.nav-item.active .nav-dot { background: #292524; }
+.nav-item:hover { background: #fafaf9; color: #292524; }
+.nav-item.active { background: var(--accent-soft); font-weight: 600; color: var(--accent-dark); border-left-color: var(--accent); }
+.nav-icon { width: 17px; height: 17px; flex-shrink: 0; color: #a8a29e; }
+.nav-item:hover .nav-icon { color: #57534e; }
+.nav-item.active .nav-icon { color: var(--accent); }
 
 /* 主区域 */
 .main-area { flex-grow: 1; display: flex; flex-direction: column; min-width: 0; }

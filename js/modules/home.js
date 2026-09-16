@@ -124,7 +124,7 @@
       }),
       summaryCard({
         key: "inventory",
-        title: "生活用品库存",
+        title: "库存管理",
         main: `${summary.lowStockCount} 件低库存`,
         sub: summary.expiringCount ? `${summary.expiringCount} 件即将过期` : "暂无临期物品",
         warn: summary.lowStockCount > 0 || summary.expiringCount > 0,

@@ -19,7 +19,7 @@
 
   const CARD_LABELS = {
     study: "学习任务", reminders: "提醒事项", meal: "饮食计划",
-    inventory: "生活用品库存", finance: "个人记账", games: "游戏娱乐",
+    inventory: "库存管理", finance: "个人记账", games: "游戏娱乐",
   };
 
   function render(container, store, ctx) {
