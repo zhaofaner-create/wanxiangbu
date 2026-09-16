@@ -169,6 +169,35 @@ describe("学习任务 ↔ 今日计划 关联同步（PRD验收标准4）", () 
   });
 });
 
+describe("学习任务：学习目标计时 + 今日学习报告", () => {
+  test("给学习目标计时后，学习目标行和今日学习报告都会显示专注时长", async () => {
+    await goToModule(page, "学习任务");
+    await page.locator(".tab-btn", { hasText: "学习目标" }).click();
+    await page.locator("button", { hasText: "+ 添加学习目标" }).click();
+    await fillModal(page, { name: "每天学法语30分钟" });
+    await submitModal(page);
+
+    const goalBlock = page.locator(".list-row-block", { hasText: "每天学法语30分钟" });
+    await assert.doesNotReject(goalBlock.waitFor());
+    await assert.doesNotReject(goalBlock.locator("button", { hasText: "开始计时" }).waitFor());
+
+    await goalBlock.locator("button", { hasText: "开始计时" }).click();
+    await assert.doesNotReject(goalBlock.locator("button", { hasText: "暂停" }).waitFor());
+    await new Promise((resolve) => setTimeout(resolve, 2200));
+    await goalBlock.locator("button", { hasText: "暂停" }).click();
+
+    const afterPause = await goalBlock.innerText();
+    assert.match(afterPause, /今天已专注 \d+秒/);
+
+    const reportCard = page.locator(".card", { hasText: "今日学习报告" });
+    await assert.doesNotReject(reportCard.waitFor());
+    assert.match(await reportCard.innerText(), /专注时长/);
+    assert.match(await reportCard.innerText(), /专注度/);
+    assert.match(await reportCard.innerText(), /效率/);
+    assert.match(await reportCard.innerText(), /每天学法语30分钟/);
+  });
+});
+
 describe("提醒事项（PRD验收标准5）", () => {
   test("一次性提醒可以标记已处理；周期性提醒展示下一次日期", async () => {
     await goToModule(page, "提醒事项");

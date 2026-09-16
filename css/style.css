@@ -89,6 +89,9 @@ body {
 .row-delete { margin-left: 10px; color: #a8a29e; cursor: pointer; font-size: 13px; }
 .row-delete:hover { color: #b91c1c; }
 .check-row-block { display: flex; flex-direction: column; gap: 2px; }
+.list-row-block { display: flex; flex-direction: column; }
+.list-row-block .list-row { border-bottom: none; padding-bottom: 0; }
+.list-row-block:not(:last-child) { border-bottom: 1px solid #f4f4f5; }
 
 /* 计时器与进度条（今日计划/学习任务通用） */
 .timer-widget { padding-left: 28px; margin-top: 4px; margin-bottom: 6px; display: flex; flex-direction: column; gap: 6px; }

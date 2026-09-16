@@ -260,6 +260,42 @@ describe("学习任务：学习目标打卡", () => {
   });
 });
 
+describe("学习任务：学习目标计时（专注度/效率统计的数据来源）", () => {
+  const realNow = Date.now;
+  let fakeNow;
+  function mockNow(ms) { fakeNow = ms; Date.now = () => fakeNow; }
+  function advance(ms) { fakeNow += ms; }
+
+  beforeEach(() => { mockNow(1_700_000_000_000); });
+  after(() => { Date.now = realNow; });
+
+  test("开始/暂停会累计 elapsedSeconds 并记一次 pauseCount", () => {
+    const goal = store.addGoal("每天学法语30分钟");
+    store.startGoalTimer(goal.id);
+    advance(60_000);
+    const paused = store.pauseGoalTimer(goal.id);
+    assert.equal(paused.timerStartedAt, null);
+
+    const [focus] = store.listGoalsWithTodayFocus();
+    assert.equal(focus.elapsedSeconds, 60);
+    assert.equal(focus.pauseCount, 1);
+  });
+
+  test("对不存在的id调用计时函数返回null", () => {
+    assert.equal(store.startGoalTimer("nope"), null);
+    assert.equal(store.pauseGoalTimer("nope"), null);
+  });
+
+  test("listGoalsWithTodayFocus 在计时器还在跑的时候，会把正在跑的这一段也实时算进去", () => {
+    const goal = store.addGoal("背单词");
+    store.startGoalTimer(goal.id);
+    advance(45_000);
+    const [focus] = store.listGoalsWithTodayFocus();
+    assert.equal(focus.elapsedSeconds, 45);
+    assert.equal(focus.running, true);
+  });
+});
+
 describe("提醒事项（PRD验收标准5）", () => {
   test("一次性提醒标记已处理", () => {
     const r = store.addReminder({ title: "护照续签预约", date: "2026-09-16", repeat: "none" });

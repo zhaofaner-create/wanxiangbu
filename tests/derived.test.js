@@ -1,8 +1,8 @@
-const { test, describe, beforeEach } = require("node:test");
+const { test, describe, beforeEach, after } = require("node:test");
 const assert = require("node:assert/strict");
 const { createStore } = require("../js/store.js");
 const { createMemoryStorage } = require("./helpers/memoryStorage.js");
-const { groupReminders, financeMonthlySummary, lowStockAndExpiringItems, homeSummary, linkCandidates } = require("../js/derived.js");
+const { groupReminders, financeMonthlySummary, lowStockAndExpiringItems, homeSummary, linkCandidates, studyFocusReport } = require("../js/derived.js");
 
 const TODAY = "2026-09-16";
 
@@ -126,5 +126,67 @@ describe("homeSummary", () => {
     assert.equal(homeSummary(store, TODAY).lowStockCount, 0);
     store.updateInventoryItem(item.id, { quantity: 1 });
     assert.equal(homeSummary(store, TODAY).lowStockCount, 1); // 重新调用即可拿到最新结果
+  });
+});
+
+describe("studyFocusReport（今日学习报告：专注度/效率）", () => {
+  const realNow = Date.now;
+  let fakeNow;
+  function mockNow(ms) { fakeNow = ms; Date.now = () => fakeNow; }
+  function advance(ms) { fakeNow += ms; }
+
+  beforeEach(() => { mockNow(1_700_000_000_000); });
+  after(() => { Date.now = realNow; });
+
+  test("完全没有计时记录时，专注度和效率都是 null，而不是 0", () => {
+    store.addGoal("每天学法语30分钟");
+    const report = studyFocusReport(store);
+    assert.equal(report.focusScore, null);
+    assert.equal(report.efficiency, null);
+    assert.equal(report.totalMinutes, 0);
+  });
+
+  test("一口气学完（没有暂停、没有空档）：专注度满分，效率接近100", () => {
+    const goal = store.addGoal("背单词");
+    store.startGoalTimer(goal.id);
+    advance(600_000); // 10分钟
+    store.pauseGoalTimer(goal.id);
+
+    const report = studyFocusReport(store);
+    assert.equal(report.totalMinutes, 10);
+    assert.equal(report.focusScore, 95); // 暂停了1次（点了"暂停"按钮结束这次计时），扣5分
+    assert.equal(report.efficiency, 100); // 全程都在专注时间里，没有额外空档
+  });
+
+  test("同样学了10分钟，但中间断断续续拖了很久才做完：效率明显更低，专注度也更低", () => {
+    const goal = store.addGoal("复习财务模型");
+    store.startGoalTimer(goal.id);
+    advance(300_000); // 专注5分钟
+    store.pauseGoalTimer(goal.id);
+    advance(3_600_000); // 中间隔了1小时才回来
+    store.startGoalTimer(goal.id);
+    advance(300_000); // 再专注5分钟
+    store.pauseGoalTimer(goal.id);
+
+    const report = studyFocusReport(store);
+    assert.equal(report.totalMinutes, 10); // 专注时长总数一样
+    assert.equal(report.focusScore, 90); // 暂停了2次
+    assert.ok(report.efficiency < 20, `断断续续应该拉低效率，实际是 ${report.efficiency}`);
+  });
+
+  test("多个学习目标会汇总到一份报告里，goals 明细按目标分别列出", () => {
+    const g1 = store.addGoal("法语");
+    const g2 = store.addGoal("金融建模");
+    store.startGoalTimer(g1.id);
+    advance(120_000);
+    store.pauseGoalTimer(g1.id);
+    store.startGoalTimer(g2.id);
+    advance(180_000);
+    store.pauseGoalTimer(g2.id);
+
+    const report = studyFocusReport(store);
+    assert.equal(report.totalMinutes, 5);
+    assert.equal(report.goals.length, 2);
+    assert.deepEqual(report.goals.map((g) => g.name).sort(), ["法语", "金融建模"]);
   });
 });

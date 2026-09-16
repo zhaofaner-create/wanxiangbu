@@ -339,7 +339,7 @@
 
     // ---------- 学习任务：学习目标 / 打卡 / 学习记录 ----------
     function addGoal(name) {
-      const g = { id: uuid(), name, createdAt: new Date().toISOString() };
+      const g = { id: uuid(), name, createdAt: new Date().toISOString(), timerStartedAt: null, todayFocus: null };
       state.studyGoals.push(g);
       persist();
       return g;
@@ -351,6 +351,62 @@
     }
     function listGoals() {
       return [...state.studyGoals];
+    }
+    function findGoal(id) {
+      return state.studyGoals.find((g) => g.id === id) || null;
+    }
+
+    /** 拿到（必要时新建）某个学习目标"今天"的专注计时统计；跨天了会自动清零重新开始统计。 */
+    function ensureGoalTodayFocus(goal, date = todayStr()) {
+      if (!goal.todayFocus || goal.todayFocus.date !== date) {
+        goal.todayFocus = { date, elapsedSeconds: 0, pauseCount: 0, firstStartAt: null, lastStopAt: null };
+      }
+      return goal.todayFocus;
+    }
+
+    /** 开始（或继续）给一个学习目标计时，用于统计今天在它上面花的专注时间。 */
+    function startGoalTimer(id) {
+      const goal = findGoal(id);
+      if (!goal) return null;
+      const focus = ensureGoalTodayFocus(goal);
+      if (!goal.timerStartedAt) {
+        goal.timerStartedAt = Date.now();
+        if (!focus.firstStartAt) focus.firstStartAt = goal.timerStartedAt;
+        persist();
+      }
+      return { ...goal };
+    }
+
+    /** 暂停学习目标的计时：累计这一段用时，并记一次"暂停"（用于后面算专注度）。 */
+    function pauseGoalTimer(id) {
+      const goal = findGoal(id);
+      if (!goal) return null;
+      const focus = ensureGoalTodayFocus(goal);
+      if (goal.timerStartedAt) {
+        const segmentSeconds = Math.max(0, Math.round((Date.now() - goal.timerStartedAt) / 1000));
+        focus.elapsedSeconds += segmentSeconds;
+        focus.pauseCount += 1;
+        focus.lastStopAt = Date.now();
+        goal.timerStartedAt = null;
+        persist();
+      }
+      return { ...goal };
+    }
+
+    /** 汇总"今天"所有学习目标的计时数据，供学习报告使用；不管计时器是不是还在跑，都会把正在跑的这一段也算进去。 */
+    function listGoalsWithTodayFocus(date = todayStr()) {
+      return state.studyGoals.map((g) => {
+        const focus = g.todayFocus && g.todayFocus.date === date ? g.todayFocus : { date, elapsedSeconds: 0, pauseCount: 0, firstStartAt: null, lastStopAt: null };
+        const running = g.timerStartedAt ? Math.max(0, Math.round((Date.now() - g.timerStartedAt) / 1000)) : 0;
+        return {
+          id: g.id, name: g.name,
+          elapsedSeconds: focus.elapsedSeconds + running,
+          pauseCount: focus.pauseCount,
+          firstStartAt: focus.firstStartAt,
+          lastStopAt: g.timerStartedAt ? Date.now() : focus.lastStopAt,
+          running: !!g.timerStartedAt,
+        };
+      });
     }
     function checkinGoal(goalId, date = todayStr()) {
       const exists = state.studyCheckins.find((c) => c.goalId === goalId && c.date === date);
@@ -614,6 +670,7 @@
       addCourse, removeCourse, listCourses,
       addAssignment, updateAssignment, removeAssignment, listAssignments, listUpcomingAssignments,
       addGoal, removeGoal, listGoals, checkinGoal, isCheckedIn, countCheckins, setDailyLog, getDailyLog,
+      startGoalTimer, pauseGoalTimer, listGoalsWithTodayFocus,
       addReminder, updateReminder, removeReminder, markReminderDone, listReminders, listRemindersWithNextDate,
       setMealEntry, getMealEntry, listMealEntriesForWeek, copyWeek,
       addInventoryItem, updateInventoryItem, removeInventoryItem, listInventoryItems, isLowStock,

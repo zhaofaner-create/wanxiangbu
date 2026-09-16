@@ -111,5 +111,31 @@
     };
   }
 
-  return { groupReminders, financeMonthlySummary, lowStockAndExpiringItems, linkCandidates, homeSummary };
+  /**
+   * 今日学习报告：汇总所有学习目标"今天"的计时数据，算出专注度和效率。
+   * - 专注度（focusScore）：暂停次数越多，专注度越低（每次暂停扣5分，最低0分）。
+   * - 效率（efficiency）：实际专注时长 占 从第一次开始计时到最后一次停止（或现在）这段总时间跨度 的比例——
+   *   同样是学了1小时，如果中间断断续续拖了3小时才做完，效率就会比一口气学完低。
+   * 两者在完全没有计时数据时都是 null，界面据此显示"今天还没有计时记录"而不是显示"0分"。
+   */
+  function studyFocusReport(store, refDate = todayStr()) {
+    const goals = store.listGoalsWithTodayFocus(refDate).filter((g) => g.elapsedSeconds > 0 || g.firstStartAt);
+    const totalSeconds = goals.reduce((sum, g) => sum + g.elapsedSeconds, 0);
+    const totalPauses = goals.reduce((sum, g) => sum + g.pauseCount, 0);
+    const totalSpanMs = goals.reduce((sum, g) => {
+      if (!g.firstStartAt) return sum;
+      const end = g.lastStopAt || Date.now();
+      return sum + Math.max(0, end - g.firstStartAt);
+    }, 0);
+    return {
+      totalSeconds,
+      totalMinutes: Math.round(totalSeconds / 60),
+      totalPauses,
+      focusScore: totalSeconds > 0 ? Math.max(0, 100 - totalPauses * 5) : null,
+      efficiency: totalSpanMs > 0 ? Math.min(100, Math.round(((totalSeconds * 1000) / totalSpanMs) * 100)) : null,
+      goals: goals.map((g) => ({ id: g.id, name: g.name, minutes: Math.round(g.elapsedSeconds / 60), pauseCount: g.pauseCount })),
+    };
+  }
+
+  return { groupReminders, financeMonthlySummary, lowStockAndExpiringItems, linkCandidates, homeSummary, studyFocusReport };
 });
