@@ -620,6 +620,49 @@ describe("游戏娱乐（PRD验收标准8）", () => {
   });
 });
 
+describe("游戏娱乐：评分/评论 + 游玩数据统计图表（开发计划第一版暂缓功能之一）", () => {
+  test("新添加的游戏默认显示「还没有评分」，编辑后可以打星评分并写评价", async () => {
+    await goToModule(page, "游戏娱乐");
+    await page.locator("button", { hasText: "+ 添加游戏" }).click();
+    await fillModal(page, { name: "艾尔登法环", status: "已通关" });
+    await submitModal(page);
+
+    const card = page.locator(".card", { hasText: "艾尔登法环" }).first();
+    assert.match(await card.innerText(), /还没有评分/);
+
+    await card.click();
+    await assert.doesNotReject(page.locator(".modal-title", { hasText: "编辑" }).waitFor());
+    await page.locator('.modal-box [name="rating"]').selectOption("5");
+    await page.locator('.modal-box [name="review"]').fill("年度最佳，强烈推荐");
+    await page.locator(".modal-box button", { hasText: "保存" }).click();
+
+    assert.match(await card.innerText(), /★★★★★/);
+    assert.match(await card.innerText(), /年度最佳，强烈推荐/);
+  });
+
+  test("记一次游玩后，「游玩时长趋势」图表和「游玩排行」都会更新", async () => {
+    await goToModule(page, "游戏娱乐");
+    await page.locator("button", { hasText: "+ 添加游戏" }).click();
+    await fillModal(page, { name: "星露谷物语", status: "在玩" });
+    await submitModal(page);
+
+    const chartCard = page.locator(".card", { hasText: "游玩时长趋势" });
+    await assert.doesNotReject(chartCard.waitFor());
+    assert.match(await chartCard.innerText(), /记一次游玩后/); // 还没有数据的提示
+
+    await page.locator("button", { hasText: "记一次游玩" }).click();
+    await fillModal(page, { date: "2026-09-16", minutes: "120" });
+    await submitModal(page);
+
+    assert.doesNotMatch(await chartCard.innerText(), /记一次游玩后/);
+
+    const rankingCard = page.locator(".card", { hasText: "游玩排行" });
+    await assert.doesNotReject(rankingCard.waitFor());
+    assert.match(await rankingCard.innerText(), /星露谷物语/);
+    assert.match(await rankingCard.innerText(), /120分钟/);
+  });
+});
+
 describe("首页联动（PRD验收标准11）", () => {
   test("在库存和游戏娱乐模块新增数据后，回到首页对应摘要卡片立即更新", async () => {
     await goToModule(page, "库存管理");

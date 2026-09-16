@@ -980,16 +980,23 @@
     }
 
     // ---------- 游戏娱乐 ----------
+    /** rating（1-5星，没评分是null）和 review（文字评价）是后加的可选字段，老游戏记录没有这两个字段，
+     * 界面上按"还没有评分"处理，不需要迁移。 */
     function addGame({ name, status = "想玩", note = "" }) {
-      const g = { id: uuid(), name, status, note, createdAt: new Date().toISOString() };
+      const g = { id: uuid(), name, status, note, rating: null, review: "", createdAt: new Date().toISOString() };
       state.games.push(g);
       persist();
       return g;
     }
+    /** updateGame 是通用的字段patch，评分/评论也是通过它来改的（patch: { rating, review }），
+     * 不需要单独的 setGameRating 之类的函数。rating 会被夹到 1-5 之间，传 null 可以清掉。 */
     function updateGame(id, patch) {
       const g = state.games.find((x) => x.id === id);
       if (!g) return null;
       Object.assign(g, patch);
+      if (patch.rating !== undefined) {
+        g.rating = patch.rating === null ? null : Math.min(5, Math.max(1, Math.round(Number(patch.rating))));
+      }
       persist();
       return { ...g };
     }
@@ -1015,6 +1022,46 @@
       return state.gameSessions
         .filter((s) => s.gameId === gameId)
         .reduce((sum, s) => sum + s.minutes, 0);
+    }
+
+    /**
+     * 最近 days 天（含 refDate 当天）每天的总游玩时长，按天排列（从早到晚），
+     * 每天再按游戏拆分明细，供"游玩数据统计图表"用手绘柱状图展示。
+     */
+    function listGamePlaytimeSeries(days = 7, refDate = todayStr()) {
+      const result = [];
+      for (let i = days - 1; i >= 0; i -= 1) {
+        const date = addDays(refDate, -i);
+        const sessions = state.gameSessions.filter((s) => s.date === date);
+        const totalMinutes = sessions.reduce((sum, s) => sum + s.minutes, 0);
+        const byGameMap = new Map();
+        sessions.forEach((s) => byGameMap.set(s.gameId, (byGameMap.get(s.gameId) || 0) + s.minutes));
+        const byGame = [...byGameMap.entries()].map(([gameId, minutes]) => {
+          const g = findGame(gameId);
+          return { gameId, name: g ? g.name : "（已删除的游戏）", minutes };
+        });
+        result.push({ date, totalMinutes, byGame });
+      }
+      return result;
+    }
+
+    /** 最近 days 天里游玩时长最多的游戏排行。注意：删除游戏会级联删除它的游玩记录（既有行为，
+     * 和"库存消耗"那种独立日志不一样），所以这里天然不会出现"游戏已删除但排行榜还有它"的情况。 */
+    function listTopPlayedGames(days = 30, refDate = todayStr(), limit = 5) {
+      const cutoff = addDays(refDate, -(days - 1));
+      const totals = new Map();
+      state.gameSessions.forEach((s) => {
+        if (s.date < cutoff || s.date > refDate) return;
+        const g = findGame(s.gameId);
+        const name = g ? g.name : "（已删除的游戏）";
+        const cur = totals.get(s.gameId) || { gameId: s.gameId, name, totalMinutes: 0 };
+        cur.totalMinutes += s.minutes;
+        totals.set(s.gameId, cur);
+      });
+      return [...totals.values()].sort((a, b) => b.totalMinutes - a.totalMinutes).slice(0, limit);
+    }
+    function findGame(id) {
+      return state.games.find((g) => g.id === id) || null;
     }
 
     // ---------- 设置 ----------
@@ -1088,6 +1135,7 @@
       addAccount, updateAccount, removeAccount, listAccounts, getAccountBalance, listAccountsWithBalance,
       getExchangeRates, setExchangeRate, CURRENCIES,
       addGame, updateGame, removeGame, listGames, addPlaySession, listSessions, totalMinutesForGame,
+      listGamePlaytimeSeries, listTopPlayedGames,
       getSettings, updateHomeCardVisibility, setLastBackupAt, manualSave,
       exportBackup, importBackup, resetAll,
     };

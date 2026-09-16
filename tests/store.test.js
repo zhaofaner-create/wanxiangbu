@@ -876,6 +876,76 @@ describe("游戏娱乐（PRD验收标准8）", () => {
   });
 });
 
+describe("游戏娱乐：评分/评论（开发计划第一版暂缓功能之一）", () => {
+  test("新添加的游戏默认没有评分，rating为null", () => {
+    const game = store.addGame({ name: "新游戏" });
+    assert.equal(game.rating, null);
+    assert.equal(game.review, "");
+  });
+
+  test("updateGame 可以设置评分（1-5星）和文字评价", () => {
+    const game = store.addGame({ name: "艾尔登法环" });
+    const updated = store.updateGame(game.id, { rating: 5, review: "年度最佳" });
+    assert.equal(updated.rating, 5);
+    assert.equal(updated.review, "年度最佳");
+  });
+
+  test("评分会被夹到1-5之间，传null可以清除评分", () => {
+    const game = store.addGame({ name: "测试游戏" });
+    assert.equal(store.updateGame(game.id, { rating: 9 }).rating, 5);
+    assert.equal(store.updateGame(game.id, { rating: 0 }).rating, 1);
+    assert.equal(store.updateGame(game.id, { rating: null }).rating, null);
+  });
+
+  test("评分/评论不影响原有的状态和备注字段", () => {
+    const game = store.addGame({ name: "只狼", status: "在玩", note: "剑仙难打" });
+    const updated = store.updateGame(game.id, { rating: 4 });
+    assert.equal(updated.status, "在玩");
+    assert.equal(updated.note, "剑仙难打");
+  });
+});
+
+describe("游戏娱乐：游玩数据统计图表（开发计划第一版暂缓功能之一）", () => {
+  test("listGamePlaytimeSeries 按天汇总总游玩时长，并按游戏拆分明细", () => {
+    const g1 = store.addGame({ name: "塞尔达传说" });
+    const g2 = store.addGame({ name: "星露谷物语" });
+    store.addPlaySession({ gameId: g1.id, date: "2026-09-16", minutes: 60 });
+    store.addPlaySession({ gameId: g2.id, date: "2026-09-16", minutes: 30 });
+    store.addPlaySession({ gameId: g1.id, date: "2026-09-14", minutes: 20 });
+
+    const series = store.listGamePlaytimeSeries(3, "2026-09-16"); // 09-14, 15, 16
+    assert.equal(series.length, 3);
+    assert.equal(series[0].date, "2026-09-14");
+    assert.equal(series[0].totalMinutes, 20);
+    assert.equal(series[1].totalMinutes, 0);
+    assert.deepEqual(series[1].byGame, []);
+    assert.equal(series[2].totalMinutes, 90); // 60 + 30
+    assert.equal(series[2].byGame.length, 2);
+  });
+
+  test("listTopPlayedGames 按累计游玩时长从高到低排序，只统计指定天数范围", () => {
+    const g1 = store.addGame({ name: "游戏A" });
+    const g2 = store.addGame({ name: "游戏B" });
+    store.addPlaySession({ gameId: g1.id, date: "2026-09-16", minutes: 30 });
+    store.addPlaySession({ gameId: g2.id, date: "2026-09-15", minutes: 90 });
+    store.addPlaySession({ gameId: g2.id, date: "2026-08-01", minutes: 500 }); // 超出范围
+
+    const top = store.listTopPlayedGames(30, "2026-09-16");
+    assert.equal(top[0].name, "游戏B");
+    assert.equal(top[0].totalMinutes, 90); // 不含8月那次
+    assert.equal(top[1].name, "游戏A");
+  });
+
+  test("游戏被删除后，统计图表和排行榜都不再包含它（和\"删除游戏级联删除游玩记录\"的既有行为一致）", () => {
+    const game = store.addGame({ name: "临时游戏" });
+    store.addPlaySession({ gameId: game.id, date: "2026-09-16", minutes: 45 });
+    store.removeGame(game.id);
+    const series = store.listGamePlaytimeSeries(1, "2026-09-16");
+    assert.equal(series[0].totalMinutes, 0);
+    assert.equal(store.listTopPlayedGames(30, "2026-09-16").length, 0);
+  });
+});
+
 describe("数据与设置：备份 / 恢复 / 清空（PRD验收标准10）", () => {
   test("导出后再导入，能完整恢复数据，包括今日计划关联关系和提醒锚点", () => {
     const course = store.addCourse("微观经济学");
