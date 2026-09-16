@@ -34,6 +34,11 @@
       studyGoals: [],
       studyCheckins: [],
       studyDailyLogs: [],
+      // 每个学习目标每天累计的专注时长（秒），用于"学习时长可视化统计图表"。
+      // 注意：这是后加的字段，不能放进 isValidDataShape() 的 required 列表里——
+      // 否则老用户本地已有的存档（没有这个字段）在下次打开时会被判定成"数据形状不对"
+      // 整体清空重置，这是绝对不能接受的（详见下面 isValidDataShape 的注释）。
+      studyTimeLog: [],
       reminders: [],
       mealPlanEntries: [],
       inventoryItems: [],
@@ -60,7 +65,14 @@
     };
   }
 
-  /** 校验一份数据是否具备根结构要求的所有字段（导入备份时用）。 */
+  /**
+   * 校验一份数据是否具备根结构要求的所有字段（导入备份时用）。
+   * 重要：这里的 required 列表只应该包含"从第一版就有的"字段。后续版本给 defaultState()
+   * 新增的字段（比如 studyTimeLog）绝不能加进来——因为 init() 是靠
+   * `{...defaultState(), ...parsed}` 合并来给老存档自动补上新字段的默认值，
+   * 如果把新字段也列进 required，老用户本地真实存档（还没有这个字段）就会被
+   * 判定成"形状不对"而被整体清空重置成空白状态，这是绝对不能接受的数据丢失。
+   */
   function isValidDataShape(data) {
     if (!data || typeof data !== "object") return false;
     const required = [
@@ -403,10 +415,10 @@
     }
 
     /** 开始（或继续）给一个学习目标计时，用于统计今天在它上面花的专注时间。 */
-    function startGoalTimer(id) {
+    function startGoalTimer(id, refDate = todayStr()) {
       const goal = findGoal(id);
       if (!goal) return null;
-      const focus = ensureGoalTodayFocus(goal);
+      const focus = ensureGoalTodayFocus(goal, refDate);
       if (!goal.timerStartedAt) {
         goal.timerStartedAt = Date.now();
         if (!focus.firstStartAt) focus.firstStartAt = goal.timerStartedAt;
@@ -415,20 +427,52 @@
       return { ...goal };
     }
 
-    /** 暂停学习目标的计时：累计这一段用时，并记一次"暂停"（用于后面算专注度）。 */
-    function pauseGoalTimer(id) {
+    /** 暂停学习目标的计时：累计这一段用时，并记一次"暂停"（用于后面算专注度）。
+     * refDate 是"这一段用时算在哪一天"，默认今天；测试里可以显式传入，不用去 mock 全局时间。 */
+    function pauseGoalTimer(id, refDate = todayStr()) {
       const goal = findGoal(id);
       if (!goal) return null;
-      const focus = ensureGoalTodayFocus(goal);
+      const focus = ensureGoalTodayFocus(goal, refDate);
       if (goal.timerStartedAt) {
         const segmentSeconds = Math.max(0, Math.round((Date.now() - goal.timerStartedAt) / 1000));
         focus.elapsedSeconds += segmentSeconds;
         focus.pauseCount += 1;
         focus.lastStopAt = Date.now();
         goal.timerStartedAt = null;
+        if (segmentSeconds > 0) recordStudyTime(goal.id, focus.date, segmentSeconds);
         persist();
       }
       return { ...goal };
+    }
+
+    /** 把一段学习时长累加进"每个目标每天"的学习时长日志里，供统计图表使用。 */
+    function recordStudyTime(goalId, date, seconds) {
+      if (seconds <= 0) return;
+      const entry = state.studyTimeLog.find((e) => e.goalId === goalId && e.date === date);
+      if (entry) {
+        entry.seconds += seconds;
+      } else {
+        state.studyTimeLog.push({ id: uuid(), goalId, date, seconds });
+      }
+    }
+
+    /**
+     * 取最近 days 天（含 refDate 当天）的学习时长统计，按天排列（从早到晚），
+     * 每天给出总时长和按目标拆分的明细，供"学习时长可视化统计图表"用手绘柱状图展示。
+     */
+    function listStudyTimeSeries(days = 7, refDate = todayStr()) {
+      const result = [];
+      for (let i = days - 1; i >= 0; i -= 1) {
+        const date = addDays(refDate, -i);
+        const entries = state.studyTimeLog.filter((e) => e.date === date && e.seconds > 0);
+        const totalSeconds = entries.reduce((sum, e) => sum + e.seconds, 0);
+        const byGoal = entries.map((e) => {
+          const g = findGoal(e.goalId);
+          return { goalId: e.goalId, name: g ? g.name : "（已删除的目标）", seconds: e.seconds };
+        });
+        result.push({ date, totalSeconds, byGoal });
+      }
+      return result;
     }
 
     /** 汇总"今天"所有学习目标的计时数据，供学习报告使用；不管计时器是不是还在跑，都会把正在跑的这一段也算进去。 */
@@ -750,7 +794,7 @@
       addCourse, removeCourse, listCourses,
       addAssignment, updateAssignment, removeAssignment, listAssignments, listUpcomingAssignments,
       addGoal, removeGoal, listGoals, checkinGoal, isCheckedIn, countCheckins, setDailyLog, getDailyLog,
-      startGoalTimer, pauseGoalTimer, listGoalsWithTodayFocus,
+      startGoalTimer, pauseGoalTimer, listGoalsWithTodayFocus, listStudyTimeSeries,
       addReminder, updateReminder, removeReminder, markReminderDone, listReminders, listRemindersWithNextDate,
       setMealEntry, getMealEntry, listMealEntriesForWeek, copyWeek,
       addInventoryItem, updateInventoryItem, removeInventoryItem, listInventoryItems, isLowStock,

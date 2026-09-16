@@ -494,6 +494,16 @@ table.data-table th { background: rgba(255,255,255,0.5); font-weight: 700; color
 .bar-track { height: 6px; background: rgba(91, 96, 104, 0.12); border-radius: 3px; }
 .bar-fill { height: 6px; background: var(--accent); border-radius: 3px; }
 
+/* 手绘竖向柱状图（学习时长趋势、游戏游玩时长等统计图表复用这一套） */
+.chart-bars { display: flex; align-items: flex-end; gap: 10px; height: 120px; padding-top: 20px; }
+.chart-bar-col { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; gap: 6px; }
+.chart-bar-value { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+.chart-bar-track { width: 100%; max-width: 32px; flex-grow: 1; display: flex; align-items: flex-end; }
+.chart-bar { width: 100%; min-height: 3px; background: var(--accent); border-radius: 4px 4px 2px 2px; transition: height 0.4s var(--spring-ease, ease); }
+.chart-bar.is-empty { background: rgba(91, 96, 104, 0.12); }
+.chart-bar-label { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+.chart-bar-label.is-today { color: var(--accent); font-weight: 600; }
+
 .section-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .grow { flex-grow: 1; }
 

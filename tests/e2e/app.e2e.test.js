@@ -273,6 +273,32 @@ describe("学习任务：学习目标计时 + 今日学习报告", () => {
   });
 });
 
+describe("学习任务：学习时长可视化统计图表（开发计划第一版暂缓功能之一）", () => {
+  test("给学习目标计时后，「学习时长趋势」图表会出现柱状图，且今天这一根有对应的分钟数", async () => {
+    await goToModule(page, "学习任务");
+    await page.locator(".tab-btn", { hasText: "学习目标" }).click();
+    await page.locator("button", { hasText: "+ 添加学习目标" }).click();
+    await fillModal(page, { name: "背单词" });
+    await submitModal(page);
+
+    const chartCard = page.locator(".card", { hasText: "学习时长趋势" });
+    await assert.doesNotReject(chartCard.waitFor());
+    // 还没开始计时之前，应该提示还没有数据
+    assert.match(await chartCard.innerText(), /开始给学习目标计时后/);
+    const barsBefore = await chartCard.locator(".chart-bar-col").count();
+    assert.equal(barsBefore, 7, "应该固定展示最近7天，一天一根柱子");
+
+    const goalBlock = page.locator(".list-row-block", { hasText: "背单词" });
+    await goalBlock.locator("button", { hasText: "开始计时" }).click();
+    await new Promise((resolve) => setTimeout(resolve, 2200));
+    await goalBlock.locator("button", { hasText: "暂停" }).click();
+
+    const afterText = await chartCard.innerText();
+    assert.doesNotMatch(afterText, /开始给学习目标计时后/, "计时之后提示语应该消失");
+    assert.match(afterText, /\d+分|0分/, "今天这根柱子上方应该显示分钟数（哪怕不到1分钟显示0分）");
+  });
+});
+
 describe("学习任务：看板视图拖拽改状态", () => {
   test("把卡片从'未开始'拖到'进行中'后，状态真的变了（列表视图的下拉框也会同步）", async () => {
     await goToModule(page, "学习任务");

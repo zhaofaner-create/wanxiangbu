@@ -317,6 +317,99 @@ describe("学习任务：学习目标计时（专注度/效率统计的数据来
   });
 });
 
+describe("学习任务：学习时长可视化统计图表（开发计划第一版暂缓功能之一）", () => {
+  const realNow = Date.now;
+  let fakeNow;
+  function mockNow(ms) { fakeNow = ms; Date.now = () => fakeNow; }
+  function advance(ms) { fakeNow += ms; }
+
+  beforeEach(() => { mockNow(1_700_000_000_000); });
+  after(() => { Date.now = realNow; });
+
+  test("暂停计时后，这一段用时会被记进 listStudyTimeSeries 里对应那一天", () => {
+    const goal = store.addGoal("每天学法语30分钟");
+    store.startGoalTimer(goal.id, "2026-09-16");
+    advance(90_000); // 90秒
+    store.pauseGoalTimer(goal.id, "2026-09-16");
+
+    const series = store.listStudyTimeSeries(3, "2026-09-16");
+    assert.equal(series.length, 3);
+    assert.equal(series[2].date, "2026-09-16"); // 最后一项是参考日期当天
+    assert.equal(series[2].totalSeconds, 90);
+    assert.equal(series[2].byGoal.length, 1);
+    assert.equal(series[2].byGoal[0].name, "每天学法语30分钟");
+    assert.equal(series[2].byGoal[0].seconds, 90);
+    // 前面没有记录的日子应该是 0，而不是缺失或报错
+    assert.equal(series[0].totalSeconds, 0);
+    assert.deepEqual(series[0].byGoal, []);
+  });
+
+  test("同一天多次开始/暂停会累加，不会互相覆盖", () => {
+    const goal = store.addGoal("背单词");
+    store.startGoalTimer(goal.id, "2026-09-16");
+    advance(30_000);
+    store.pauseGoalTimer(goal.id, "2026-09-16");
+    store.startGoalTimer(goal.id, "2026-09-16");
+    advance(20_000);
+    store.pauseGoalTimer(goal.id, "2026-09-16");
+
+    const [today] = store.listStudyTimeSeries(1, "2026-09-16");
+    assert.equal(today.totalSeconds, 50);
+  });
+
+  test("多个目标同一天都学习过，按目标拆分明细，总时长是各目标之和", () => {
+    const g1 = store.addGoal("法语");
+    const g2 = store.addGoal("日语");
+    store.startGoalTimer(g1.id, "2026-09-16");
+    advance(40_000);
+    store.pauseGoalTimer(g1.id, "2026-09-16");
+    store.startGoalTimer(g2.id, "2026-09-16");
+    advance(25_000);
+    store.pauseGoalTimer(g2.id, "2026-09-16");
+
+    const [today] = store.listStudyTimeSeries(1, "2026-09-16");
+    assert.equal(today.totalSeconds, 65);
+    assert.equal(today.byGoal.length, 2);
+    const names = today.byGoal.map((b) => b.name).sort();
+    assert.deepEqual(names, ["日语", "法语"]);
+  });
+
+  test("没有开始过就暂停，不会产生任何学习时长记录（避免脏数据）", () => {
+    const goal = store.addGoal("从没开始过的目标");
+    store.pauseGoalTimer(goal.id, "2026-09-16");
+    const [today] = store.listStudyTimeSeries(1, "2026-09-16");
+    assert.equal(today.totalSeconds, 0);
+  });
+
+  test("不同天的学习记录互不影响，按天分别累计", () => {
+    const goal = store.addGoal("阅读");
+    store.startGoalTimer(goal.id, "2026-09-14");
+    advance(60_000);
+    store.pauseGoalTimer(goal.id, "2026-09-14");
+    store.startGoalTimer(goal.id, "2026-09-16");
+    advance(120_000);
+    store.pauseGoalTimer(goal.id, "2026-09-16");
+
+    const series = store.listStudyTimeSeries(3, "2026-09-16"); // 09-14, 09-15, 09-16
+    assert.equal(series[0].date, "2026-09-14");
+    assert.equal(series[0].totalSeconds, 60);
+    assert.equal(series[1].totalSeconds, 0);
+    assert.equal(series[2].totalSeconds, 120);
+  });
+
+  test("目标被删除后，历史学习时长记录仍然保留（不因为删除目标而丢失统计数据），只是显示为已删除", () => {
+    const goal = store.addGoal("临时目标");
+    store.startGoalTimer(goal.id, "2026-09-16");
+    advance(30_000);
+    store.pauseGoalTimer(goal.id, "2026-09-16");
+    store.removeGoal(goal.id);
+
+    const [today] = store.listStudyTimeSeries(1, "2026-09-16");
+    assert.equal(today.totalSeconds, 30);
+    assert.equal(today.byGoal[0].name, "（已删除的目标）");
+  });
+});
+
 describe("提醒事项（PRD验收标准5）", () => {
   test("一次性提醒标记已处理", () => {
     const r = store.addReminder({ title: "护照续签预约", date: "2026-09-16", repeat: "none" });
