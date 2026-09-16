@@ -241,6 +241,7 @@
           }),
           h("span", { class: "badge " + PRIORITY_BADGE_CLASS[item.priority || "中"] }, item.priority || "中"),
           h("span", {}, item.text + (metaBits.length ? ` · ${metaBits.join(" · ")}` : "")),
+          item.rolledFrom ? h("span", { class: "badge badge-rolled" }, `延期自 ${formatDateDisplay(item.rolledFrom)}`) : null,
           item.source !== "manual"
             ? h("span", { class: "badge" }, item.source === "study" ? "来自学习任务" : "来自提醒事项")
             : null,

@@ -84,6 +84,7 @@
       if (!raw) {
         state = defaultState();
         persist();
+        rolloverUnfinishedTodayPlan();
         return state;
       }
       try {
@@ -98,6 +99,7 @@
         state = defaultState();
         persist();
       }
+      rolloverUnfinishedTodayPlan();
       return state;
     }
 
@@ -186,6 +188,7 @@
       return {
         priority: "中", note: "", estimatedMinutes: null,
         elapsedSeconds: 0, timerStartedAt: null, satisfaction: null,
+        rolledFrom: null,
         ...t,
       };
     }
@@ -285,6 +288,28 @@
     function removeTodayPlanItem(id) {
       state.todayPlan = state.todayPlan.filter((t) => t.id !== id);
       persist();
+    }
+
+    /**
+     * 把日期早于参考日期（默认今天）、还没完成的今日计划事项自动滚动到参考日期，
+     * 而不是留在过去的日期里悄悄消失在"历史"标签下面看不见。开发计划里这条第一版
+     * 明确没做，现在补上：应用每次启动（init()）时自动跑一遍。
+     * - 已完成（done 或者关联的源记录已完成）的不会被滚动，还是留在原来的日期。
+     * - 用 rolledFrom 记住第一次的原始日期，之后即使又隔了好几天没打开、连续被
+     *   滚动多次，也只保留最早那一次的日期，方便界面上显示"延期自 X月X日"。
+     */
+    function rolloverUnfinishedTodayPlan(refDate = todayStr()) {
+      let count = 0;
+      state.todayPlan.forEach((t) => {
+        if (t.date >= refDate) return;
+        const done = t.done || sourceIsComplete(t);
+        if (done) return;
+        if (!t.rolledFrom) t.rolledFrom = t.date;
+        t.date = refDate;
+        count += 1;
+      });
+      if (count > 0) persist();
+      return count;
     }
 
     /** 把某个学习任务的作业/考试关联进指定日期的今日计划。 */
@@ -719,6 +744,7 @@
       init, getState, persist,
       addQuickNote, removeQuickNote, listQuickNotes,
       addTodayPlanItem, toggleTodayPlanDone, removeTodayPlanItem, listTodayPlan, updateTodayPlanItem, listTodayPlanRange,
+      rolloverUnfinishedTodayPlan,
       startTodayPlanTimer, pauseTodayPlanTimer, finishTodayPlanItem, setTodayPlanSatisfaction,
       linkAssignmentToToday, linkReminderToToday,
       addCourse, removeCourse, listCourses,

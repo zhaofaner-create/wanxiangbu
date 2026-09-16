@@ -556,3 +556,70 @@ describe("设置：手动保存", () => {
     assert.equal(store.listQuickNotes()[0].text, "测试备忘");
   });
 });
+
+describe("今日计划：昨天未完成事项自动滚动到今天", () => {
+  test("过去日期、未完成的手动事项会被滚动到参考日期，并记下原始日期", () => {
+    const item = store.addTodayPlanItem({ text: "写周报", date: "2026-09-14" });
+    const count = store.rolloverUnfinishedTodayPlan("2026-09-16");
+    assert.equal(count, 1);
+    const rolled = store.listTodayPlan("2026-09-16").find((t) => t.id === item.id);
+    assert.ok(rolled, "应该出现在参考日期这一天");
+    assert.equal(rolled.rolledFrom, "2026-09-14");
+    assert.equal(store.listTodayPlan("2026-09-14").length, 0, "原来的日期下不应该还留着");
+  });
+
+  test("已完成的过去事项不会被滚动，留在原来的日期", () => {
+    const item = store.addTodayPlanItem({ text: "交房租", date: "2026-09-10" });
+    store.toggleTodayPlanDone(item.id);
+    const count = store.rolloverUnfinishedTodayPlan("2026-09-16");
+    assert.equal(count, 0);
+    assert.equal(store.listTodayPlan("2026-09-10").length, 1);
+    assert.equal(store.listTodayPlan("2026-09-16").length, 0);
+  });
+
+  test("关联的学习任务/提醒已经通过源记录完成的，不会被滚动", () => {
+    const course = store.addCourse("统计学");
+    const assignment = store.addAssignment({ courseId: course.id, title: "作业一", dueDate: "2026-09-12" });
+    const linked = store.linkAssignmentToToday(assignment.id, "2026-09-10");
+    store.updateAssignment(assignment.id, { status: "已完成" }); // 通过源记录标记完成，不是 today-plan 自己的 done 字段
+
+    const count = store.rolloverUnfinishedTodayPlan("2026-09-16");
+    assert.equal(count, 0);
+    const stillThere = store.listTodayPlan("2026-09-10").find((t) => t.id === linked.id);
+    assert.ok(stillThere, "源记录已完成的事项应该留在原来的日期");
+  });
+
+  test("今天及以后日期的事项不受影响", () => {
+    const item = store.addTodayPlanItem({ text: "今天的任务", date: "2026-09-16" });
+    const future = store.addTodayPlanItem({ text: "以后的任务", date: "2026-09-20" });
+    const count = store.rolloverUnfinishedTodayPlan("2026-09-16");
+    assert.equal(count, 0);
+    assert.equal(store.listTodayPlan("2026-09-16").find((t) => t.id === item.id).rolledFrom, null);
+    assert.equal(store.listTodayPlan("2026-09-20").find((t) => t.id === future.id).rolledFrom, null);
+  });
+
+  test("连续多天没打开，多次滚动只保留最早一次的原始日期", () => {
+    const item = store.addTodayPlanItem({ text: "还没做的事", date: "2026-09-10" });
+    store.rolloverUnfinishedTodayPlan("2026-09-12"); // 第一次滚动：09-10 -> 09-12
+    store.rolloverUnfinishedTodayPlan("2026-09-16"); // 第二次滚动：09-12 -> 09-16
+    const rolled = store.listTodayPlan("2026-09-16").find((t) => t.id === item.id);
+    assert.equal(rolled.rolledFrom, "2026-09-10", "rolledFrom 应该一直是最早那次，不会被后面的滚动覆盖");
+  });
+
+  test("store.init() 加载已有数据时会自动触发一次滚动", () => {
+    store.addTodayPlanItem({ text: "过期事项", date: "2020-01-01" });
+
+    const store2 = createStore(storage);
+    const state2 = store2.init();
+    const item2 = state2.todayPlan[0];
+    assert.notEqual(item2.date, "2020-01-01", "重新 init 后应该已经被自动滚动到今天");
+    assert.equal(item2.rolledFrom, "2020-01-01");
+  });
+
+  test("没有过期未完成事项时，滚动次数为 0，不会误伤其它数据", () => {
+    store.addTodayPlanItem({ text: "今天的事", date: "2026-09-16" });
+    const count = store.rolloverUnfinishedTodayPlan("2026-09-16");
+    assert.equal(count, 0);
+    assert.equal(store.listTodayPlan("2026-09-16").length, 1);
+  });
+});
