@@ -568,6 +568,30 @@ describe("数据与设置：手动保存", () => {
   });
 });
 
+describe("数据与设置：页面重新设计", () => {
+  test("按'数据管理/偏好设置'分两栏展示，每张卡片前面都有图标，危险操作单独一块", async () => {
+    await goToModule(page, "数据与设置");
+
+    const sectionLabels = await page.locator(".settings-section-label").allInnerTexts();
+    assert.deepEqual(sectionLabels, ["数据管理", "偏好设置"]);
+
+    // 手动保存、数据备份两张卡片在"数据管理"这一栏；首页摘要显示在"偏好设置"那一栏。
+    const dataCol = page.locator(".settings-col", { hasText: "数据管理" });
+    await assert.doesNotReject(dataCol.locator(".card", { hasText: "手动保存" }).waitFor());
+    await assert.doesNotReject(dataCol.locator(".card", { hasText: "数据备份" }).waitFor());
+    const prefCol = page.locator(".settings-col", { hasText: "偏好设置" });
+    await assert.doesNotReject(prefCol.locator(".card", { hasText: "首页摘要显示" }).waitFor());
+
+    // 每张卡片标题前都应该有一个图标，不再是光秃秃的纯文字标题。
+    const cardCount = await page.locator(".settings-page .card").count();
+    const iconCount = await page.locator(".settings-page .card-icon").count();
+    assert.equal(iconCount, cardCount);
+
+    // 危险操作单独成一块，视觉上和其他设置区分开（红色调），而不是混在普通卡片列表里。
+    await assert.doesNotReject(page.locator(".danger-card", { hasText: "危险操作" }).waitFor());
+  });
+});
+
 describe("离线可用（PRD验收标准1）", () => {
   test("整个测试过程中，浏览器没有对外发起任何 http(s) 网络请求", () => {
     assert.deepEqual(networkViolations, []);
