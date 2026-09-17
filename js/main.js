@@ -6,7 +6,6 @@
   var store = storeModule.store;
   var APP_NAME = storeModule.APP_NAME;
   var renderQuickMemo = require("./components/quickMemo.js").renderQuickMemo;
-  var initCardTilt = require("./components/tilt.js").initCardTilt;
 
   var home = require("./modules/home.js");
   var todayPlan = require("./modules/todayPlan.js");
@@ -181,6 +180,5 @@
 
   store.init();
   applyAppearance();
-  initCardTilt();
   navigateTo("home");
 })(typeof window !== "undefined" ? window : globalThis);

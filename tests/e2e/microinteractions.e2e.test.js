@@ -1,6 +1,10 @@
-// 精选微交互动效端到端测试：按钮按压的物理压缩效果、卡片跟随鼠标的3D倾斜。
-// 呼吸描边光/交错入场这些纯视觉、没有可断言的"状态"的效果，靠前面截图人工确认过，
-// 这里只测试有确定行为可以断言的两个：按压时的 scale、鼠标移动时的 rotate。
+// 精选微交互动效端到端测试：按钮按压的物理压缩效果。
+// 呼吸描边光/交错入场这些纯视觉、没有可断言的"状态"的效果，靠前面截图人工确认过。
+//
+// 注意：卡片跟随鼠标的3D倾斜效果已经在用户反馈后移除——鼠标移过去点按钮时卡片会
+// 跟着倾斜、按钮位置跟着偏移，反而导致"移过去点击时东西却跑了"的误触问题。悬浮时
+// 外圈的彩色循环光圈（conic-gradient描边）和底部呼吸光晕是纯 CSS :hover 效果，
+// 跟这个已移除的 JS 倾斜是两回事，用户明确要求保留，没有受影响。
 import { test, describe, before, after, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { chromium } from "playwright";
@@ -53,24 +57,15 @@ describe("微交互：按钮按压物理效果", () => {
   });
 });
 
-describe("微交互：卡片3D倾斜", () => {
-  test("鼠标在卡片上移动时卡片会跟着倾斜，移开后弹簧回正", async () => {
+describe("微交互：卡片悬浮不应该再有3D倾斜位移（回归防护）", () => {
+  test("鼠标在卡片上移动，卡片本身的 inline transform 不应该出现 rotateX/rotateY", async () => {
     const card = page.locator(".card").first();
     await assert.doesNotReject(card.waitFor());
     const box = await card.boundingBox();
 
-    // 移到卡片的左上角附近（明显偏离中心），应该产生看得见的旋转
     await page.mouse.move(box.x + 4, box.y + 4);
-    await page.mouse.move(box.x + 6, box.y + 6); // 多移动一次，确保触发 pointermove
-    const tiltedTransform = await card.evaluate((el) => el.style.transform);
-    assert.match(tiltedTransform, /rotateX/);
-    assert.match(tiltedTransform, /rotateY/);
-
-    // 移到卡片范围外，应该弹簧回正到 rotateX(0deg) rotateY(0deg)
-    await page.mouse.move(box.x + box.width + 100, box.y + box.height + 100);
-    await page.waitForFunction((selector) => {
-      const el = document.querySelector(selector);
-      return el && /rotateX\(0(\.0+)?deg\)\s*rotateY\(0(\.0+)?deg\)/.test(el.style.transform);
-    }, ".card", { timeout: 3000 });
+    await page.mouse.move(box.x + 6, box.y + 6);
+    const transform = await card.evaluate((el) => el.style.transform);
+    assert.doesNotMatch(transform || "", /rotateX|rotateY/, "卡片不应该再跟随鼠标倾斜，避免点击时按钮跟着跑位");
   });
 });
