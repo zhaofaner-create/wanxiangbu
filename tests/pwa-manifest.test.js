@@ -67,4 +67,41 @@ describe("PWA：本地服务器脚本 serve.js", () => {
     const serveJs = fs.readFileSync(path.join(ROOT, "serve.js"), "utf8");
     assert.match(serveJs, /startsWith\(ROOT\)/, "必须校验最终文件路径仍在项目目录内");
   });
+
+  test("绑定的是 0.0.0.0 而不是 127.0.0.1，这样手机/iPad同一个WiFi下才能连上", () => {
+    const serveJs = fs.readFileSync(path.join(ROOT, "serve.js"), "utf8");
+    assert.match(serveJs, /listen\(PORT,\s*"0\.0\.0\.0"/, "必须监听 0.0.0.0，只绑 127.0.0.1 的话局域网设备连不上");
+  });
+});
+
+describe("PWA：serve.js 里 listLanAddresses（找出手机能连的局域网地址）", () => {
+  const { listLanAddresses } = require(path.join(ROOT, "serve.js"));
+
+  test("从网卡列表里挑出局域网 IPv4 地址，过滤掉回环地址和IPv6", () => {
+    const fakeInterfaces = {
+      lo: [{ family: "IPv4", internal: true, address: "127.0.0.1" }],
+      en0: [
+        { family: "IPv4", internal: false, address: "192.168.1.23" },
+        { family: "IPv6", internal: false, address: "fe80::1" },
+      ],
+    };
+    assert.deepEqual(listLanAddresses(fakeInterfaces), ["192.168.1.23"]);
+  });
+
+  test("同时连了多个网卡（比如WiFi+有线）时，两个地址都要列出来", () => {
+    const fakeInterfaces = {
+      en0: [{ family: "IPv4", internal: false, address: "192.168.1.23" }],
+      en5: [{ family: "IPv4", internal: false, address: "10.0.0.5" }],
+    };
+    assert.deepEqual(listLanAddresses(fakeInterfaces), ["192.168.1.23", "10.0.0.5"]);
+  });
+
+  test("只有回环地址、没有真实局域网地址时返回空数组，不报错", () => {
+    const fakeInterfaces = { lo: [{ family: "IPv4", internal: true, address: "127.0.0.1" }] };
+    assert.deepEqual(listLanAddresses(fakeInterfaces), []);
+  });
+
+  test("不传参数时，会读真实的 os.networkInterfaces()，不报错也不返回 undefined", () => {
+    assert.ok(Array.isArray(listLanAddresses()));
+  });
 });
