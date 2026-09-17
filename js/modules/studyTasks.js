@@ -16,7 +16,6 @@
   const { createSegmented } = require("../components/segmented.js");
   const { openFormModal } = require("../components/modal.js");
   const { openConfirm } = require("../components/confirm.js");
-  const { renderLineChartSvg } = require("../components/lineChart.js");
   const { studyFocusReport } = require("../derived.js");
   const { todayStr, formatDateDisplay, weekdayLabel, daysUntil } = require("../utils.js");
 
@@ -279,35 +278,28 @@
     ]);
   }
 
-  /** 折线图：最近7天每天的学习时长（跨所有学习目标汇总）趋势，不依赖任何图表库。 */
+  /** 手绘竖向柱状图：最近7天每天的学习时长（跨所有学习目标汇总），不依赖任何图表库。 */
   function renderStudyTimeChart(store, today) {
     const days = 7;
     const series = store.listStudyTimeSeries(days, today);
+    const maxSeconds = Math.max(1, ...series.map((d) => d.totalSeconds));
     const hasAny = series.some((d) => d.totalSeconds > 0);
-    const todayIndex = series.findIndex((d) => d.date === today);
 
-    const svg = renderLineChartSvg(
-      [
-        {
-          values: series.map((d) => Math.round(d.totalSeconds / 60)),
-          color: "hsl(226, 72%, 60%)",
-          formatValue: (v) => `${v}分`,
-          showValues: true,
-        },
-      ],
-      { todayIndex: todayIndex >= 0 ? todayIndex : undefined }
-    );
-
-    const labels = series.map((d) =>
-      h("div", { class: "chart-bar-label" + (d.date === today ? " is-today" : "") }, weekdayLabel(d.date))
-    );
+    const bars = series.map((d) => {
+      const heightPct = d.totalSeconds > 0 ? Math.max(6, Math.round((d.totalSeconds / maxSeconds) * 100)) : 4;
+      const minutes = Math.round(d.totalSeconds / 60);
+      return h("div", { class: "chart-bar-col" }, [
+        h("div", { class: "chart-bar-value" }, d.totalSeconds > 0 ? `${minutes}分` : ""),
+        h("div", { class: "chart-bar-track" }, [
+          h("div", { class: "chart-bar" + (d.totalSeconds > 0 ? "" : " is-empty"), style: `height:${heightPct}%;` }),
+        ]),
+        h("div", { class: "chart-bar-label" + (d.date === today ? " is-today" : "") }, weekdayLabel(d.date)),
+      ]);
+    });
 
     return h("div", { class: "card" }, [
       h("div", { class: "card-title" }, "学习时长趋势 · 最近7天"),
-      h("div", { class: "line-chart-wrap" }, [
-        h("div", { html: svg }),
-        h("div", { class: "line-chart-labels" }, labels),
-      ]),
+      h("div", { class: "chart-bars" }, bars),
       hasAny ? null : h("div", { class: "empty-hint", style: "margin-top:8px;" }, "开始给学习目标计时后，这里会自动画出每天的学习时长趋势"),
     ]);
   }

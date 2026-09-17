@@ -16,7 +16,6 @@
   const { createSegmented } = require("../components/segmented.js");
   const { openFormModal } = require("../components/modal.js");
   const { openConfirm } = require("../components/confirm.js");
-  const { renderLineChartSvg } = require("../components/lineChart.js");
   const { todayStr, weekdayLabel } = require("../utils.js");
 
   const meta = { id: "games", label: "游戏娱乐", title: "游戏娱乐", subtitle: "游戏清单与游玩时长" };
@@ -146,36 +145,28 @@
     ]));
   }
 
-  /** 折线图：最近7天每天的总游玩时长（跨所有游戏汇总）趋势。 */
+  /** 手绘竖向柱状图：最近7天每天的总游玩时长（跨所有游戏汇总）。 */
   function renderPlaytimeChart(store) {
     const today = todayStr();
     const days = 7;
     const series = store.listGamePlaytimeSeries(days, today);
+    const maxMinutes = Math.max(1, ...series.map((d) => d.totalMinutes));
     const hasAny = series.some((d) => d.totalMinutes > 0);
-    const todayIndex = series.findIndex((d) => d.date === today);
 
-    const svg = renderLineChartSvg(
-      [
-        {
-          values: series.map((d) => d.totalMinutes),
-          color: "hsl(330, 60%, 60%)",
-          formatValue: (v) => `${v}分钟`,
-          showValues: true,
-        },
-      ],
-      { todayIndex: todayIndex >= 0 ? todayIndex : undefined }
-    );
-
-    const labels = series.map((d) =>
-      h("div", { class: "chart-bar-label" + (d.date === today ? " is-today" : "") }, weekdayLabel(d.date))
-    );
+    const bars = series.map((d) => {
+      const heightPct = d.totalMinutes > 0 ? Math.max(6, Math.round((d.totalMinutes / maxMinutes) * 100)) : 4;
+      return h("div", { class: "chart-bar-col" }, [
+        h("div", { class: "chart-bar-value" }, d.totalMinutes > 0 ? `${d.totalMinutes}分钟` : ""),
+        h("div", { class: "chart-bar-track" }, [
+          h("div", { class: "chart-bar" + (d.totalMinutes > 0 ? "" : " is-empty"), style: `height:${heightPct}%;` }),
+        ]),
+        h("div", { class: "chart-bar-label" + (d.date === today ? " is-today" : "") }, weekdayLabel(d.date)),
+      ]);
+    });
 
     return h("div", { class: "card split-main" }, [
       h("div", { class: "card-title" }, "游玩时长趋势 · 最近7天"),
-      h("div", { class: "line-chart-wrap" }, [
-        h("div", { html: svg }),
-        h("div", { class: "line-chart-labels" }, labels),
-      ]),
+      h("div", { class: "chart-bars" }, bars),
       hasAny ? null : h("div", { class: "empty-hint", style: "margin-top:8px;" }, "记一次游玩后，这里会自动画出每天的游玩时长趋势"),
     ]);
   }

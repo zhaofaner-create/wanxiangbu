@@ -16,7 +16,6 @@
   const { createSegmented } = require("../components/segmented.js");
   const { openFormModal } = require("../components/modal.js");
   const { openConfirm } = require("../components/confirm.js");
-  const { renderLineChartSvg } = require("../components/lineChart.js");
 
   const meta = { id: "readingNotes", label: "读书笔记", title: "读书笔记", subtitle: "书单、进度与读书笔记" };
 
@@ -181,28 +180,24 @@
     ]));
   }
 
-  /** 折线图：最近6个月每月读完的书籍数量趋势。 */
+  /** 手绘竖向柱状图：最近6个月每月读完的书籍数量。 */
   function renderFinishedChart(store) {
     const series = store.listBooksFinishedSeries(6);
+    const maxCount = Math.max(1, ...series.map((d) => d.count));
     const hasAny = series.some((d) => d.count > 0);
-
-    const svg = renderLineChartSvg([
-      {
-        values: series.map((d) => d.count),
-        color: "hsl(266, 55%, 62%)",
-        formatValue: (v) => `${v}本`,
-        showValues: true,
-      },
-    ]);
-
-    const labels = series.map((d) => h("div", { class: "chart-bar-label" }, d.month.slice(5)));
-
+    const bars = series.map((d) => {
+      const heightPct = d.count > 0 ? Math.max(6, Math.round((d.count / maxCount) * 100)) : 4;
+      return h("div", { class: "chart-bar-col" }, [
+        h("div", { class: "chart-bar-value" }, d.count > 0 ? `${d.count}本` : ""),
+        h("div", { class: "chart-bar-track" }, [
+          h("div", { class: "chart-bar" + (d.count > 0 ? "" : " is-empty"), style: `height:${heightPct}%;` }),
+        ]),
+        h("div", { class: "chart-bar-label" }, d.month.slice(5)),
+      ]);
+    });
     return h("div", { class: "card" }, [
       h("div", { class: "card-title" }, "读完趋势 · 最近6个月"),
-      h("div", { class: "line-chart-wrap" }, [
-        h("div", { html: svg }),
-        h("div", { class: "line-chart-labels" }, labels),
-      ]),
+      h("div", { class: "chart-bars" }, bars),
       hasAny ? null : h("div", { class: "empty-hint", style: "margin-top:8px;" }, "把一本书标记成「读完」后，这里会自动画出每月读完数量"),
     ]);
   }
