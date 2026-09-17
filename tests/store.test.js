@@ -1011,6 +1011,98 @@ describe("设置：手动保存", () => {
   });
 });
 
+describe("设置：外观（字体字号 / 白天夜间主题）", () => {
+  test("默认标准字号、白天模式", () => {
+    assert.equal(store.getSettings().fontScale, "medium");
+    assert.equal(store.getSettings().theme, "day");
+  });
+
+  test("setFontScale 只接受合法档位，非法值忽略", () => {
+    store.setFontScale("large");
+    assert.equal(store.getSettings().fontScale, "large");
+    store.setFontScale("这是啥");
+    assert.equal(store.getSettings().fontScale, "large", "非法值应该被忽略，不覆盖已有设置");
+  });
+
+  test("setTheme / toggleTheme", () => {
+    store.setTheme("night");
+    assert.equal(store.getSettings().theme, "night");
+    const after = store.toggleTheme();
+    assert.equal(after, "day");
+    assert.equal(store.getSettings().theme, "day");
+  });
+
+  test("老存档里 settings 没有 fontScale/theme/profile 字段时，重新 init 应该自动补上默认值（不能变成 undefined）", () => {
+    storage.setItem("faner-app-data", JSON.stringify({
+      schemaVersion: 1,
+      quickNotes: [], todayPlan: [], studyCourses: [], studyAssignments: [],
+      studyGoals: [], studyCheckins: [], studyDailyLogs: [], reminders: [],
+      mealPlanEntries: [], inventoryItems: [], shoppingListItems: [],
+      financeTransactions: [], financeCategories: ["餐饮"], games: [], gameSessions: [],
+      settings: { homeCards: { study: false }, lastBackupAt: null, lastManualSaveAt: null }, // 模拟老版本存档
+    }));
+    const s = createStore(storage);
+    s.init();
+    const settings = s.getSettings();
+    assert.equal(settings.fontScale, "medium", "老存档缺失的字段要补上默认值");
+    assert.equal(settings.theme, "day");
+    assert.deepEqual(settings.profile, { name: "", avatar: "🙂", avatarImage: null });
+    assert.equal(settings.homeCards.study, false, "老存档里已有的字段要保留，不能被默认值覆盖");
+  });
+});
+
+describe("设置：个人资料（昵称/头像）", () => {
+  test("默认昵称为空、默认头像是🙂、默认没有上传照片", () => {
+    const profile = store.getSettings().profile;
+    assert.equal(profile.name, "");
+    assert.equal(profile.avatar, "🙂");
+    assert.equal(profile.avatarImage, null);
+  });
+
+  test("updateProfile 只更新传入的字段", () => {
+    store.updateProfile({ name: "阿凡" });
+    assert.equal(store.getSettings().profile.name, "阿凡");
+    assert.equal(store.getSettings().profile.avatar, "🙂", "没传的字段应该保持不变");
+    store.updateProfile({ avatar: "🐼" });
+    assert.equal(store.getSettings().profile.name, "阿凡", "改头像不应该把昵称清空");
+    assert.equal(store.getSettings().profile.avatar, "🐼");
+  });
+
+  test("上传头像照片（avatarImage）会持久化，且不影响昵称", () => {
+    store.updateProfile({ name: "小明" });
+    store.updateProfile({ avatarImage: "data:image/jpeg;base64,FAKE" });
+    const profile = store.getSettings().profile;
+    assert.equal(profile.avatarImage, "data:image/jpeg;base64,FAKE");
+    assert.equal(profile.name, "小明", "上传照片不应该影响已经填好的昵称");
+  });
+
+  test("移除头像照片（avatarImage 设为 null）之后能正确回到 emoji 头像", () => {
+    store.updateProfile({ avatar: "🦊", avatarImage: "data:image/jpeg;base64,FAKE" });
+    assert.equal(store.getSettings().profile.avatarImage, "data:image/jpeg;base64,FAKE");
+    store.updateProfile({ avatarImage: null });
+    const profile = store.getSettings().profile;
+    assert.equal(profile.avatarImage, null);
+    assert.equal(profile.avatar, "🦊", "移除照片不应该连带把之前选的 emoji 也清掉");
+  });
+
+  test("老存档里 settings.profile 完全没有 avatarImage 字段时，重新 init 应该自动补上默认值 null", () => {
+    storage.setItem("faner-app-data", JSON.stringify({
+      schemaVersion: 1,
+      quickNotes: [], todayPlan: [], studyCourses: [], studyAssignments: [],
+      studyGoals: [], studyCheckins: [], studyDailyLogs: [], reminders: [],
+      mealPlanEntries: [], inventoryItems: [], shoppingListItems: [],
+      financeTransactions: [], financeCategories: ["餐饮"], games: [], gameSessions: [],
+      settings: { profile: { name: "老用户", avatar: "🐶" }, lastBackupAt: null, lastManualSaveAt: null }, // 模拟老版本存档，没有 avatarImage 字段
+    }));
+    const s = createStore(storage);
+    s.init();
+    const profile = s.getSettings().profile;
+    assert.equal(profile.name, "老用户", "老存档里已有的字段要保留");
+    assert.equal(profile.avatar, "🐶");
+    assert.equal(profile.avatarImage, null, "老存档没有的新字段要补上默认值，不能是 undefined");
+  });
+});
+
 describe("今日计划：昨天未完成事项自动滚动到今天", () => {
   test("过去日期、未完成的手动事项会被滚动到参考日期，并记下原始日期", () => {
     const item = store.addTodayPlanItem({ text: "写周报", date: "2026-09-14" });
@@ -1075,5 +1167,105 @@ describe("今日计划：昨天未完成事项自动滚动到今天", () => {
     const count = store.rolloverUnfinishedTodayPlan("2026-09-16");
     assert.equal(count, 0);
     assert.equal(store.listTodayPlan("2026-09-16").length, 1);
+  });
+});
+
+describe("读书笔记：书目管理", () => {
+  test("添加书目默认状态是'想读'，评分默认为空", () => {
+    const book = store.addBook({ title: "百年孤独", author: "加西亚·马尔克斯" });
+    assert.equal(book.status, "想读");
+    assert.equal(book.rating, null);
+    assert.equal(store.listBooks().length, 1);
+  });
+
+  test("非法状态会被忽略，落回默认'想读'", () => {
+    const book = store.addBook({ title: "测试书", status: "乱写的状态" });
+    assert.equal(book.status, "想读");
+  });
+
+  test("按状态筛选书目", () => {
+    store.addBook({ title: "书A", status: "想读" });
+    store.addBook({ title: "书B", status: "在玩" }); // 非法状态 -> 落回想读
+    store.addBook({ title: "书C", status: "在读" });
+    assert.equal(store.listBooks("想读").length, 2);
+    assert.equal(store.listBooks("在读").length, 1);
+    assert.equal(store.listBooks("全部").length, 3);
+    assert.equal(store.listBooks().length, 3);
+  });
+
+  test("updateBook 更新状态为'读完'时自动记录完成日期，评分被夹在 1-5 之间", () => {
+    const book = store.addBook({ title: "刻意练习" });
+    assert.equal(book.finishedAt, undefined);
+    const updated = store.updateBook(book.id, { status: "读完", rating: 8 });
+    assert.equal(updated.status, "读完");
+    assert.ok(updated.finishedAt, "读完之后应该自动记一个完成日期");
+    assert.equal(updated.rating, 5, "评分应该被夹到最大值5");
+  });
+
+  test("再次更新已经读完的书，不会覆盖第一次记录的完成日期", () => {
+    const book = store.addBook({ title: "小王子" });
+    const first = store.updateBook(book.id, { status: "读完" });
+    const finishedAt = first.finishedAt;
+    const second = store.updateBook(book.id, { status: "在读" });
+    const third = store.updateBook(second.id, { status: "读完" });
+    assert.equal(third.finishedAt, finishedAt, "完成日期应该保留第一次读完的记录");
+  });
+
+  test("删除书目时，挂在它下面的读书笔记也要一起删掉", () => {
+    const book = store.addBook({ title: "将被删除的书" });
+    store.addBookNote(book.id, "第一条笔记");
+    store.addBookNote(book.id, "第二条笔记");
+    assert.equal(store.listBookNotes(book.id).length, 2);
+    store.removeBook(book.id);
+    assert.equal(store.findBook(book.id), null);
+    assert.equal(store.listBookNotes(book.id).length, 0, "书被删了，笔记不应该变成孤儿数据");
+  });
+});
+
+describe("读书笔记：读书摘录/笔记", () => {
+  test("给一本书添加多条笔记，按最新在前排序", () => {
+    const book = store.addBook({ title: "人类简史" });
+    store.addBookNote(book.id, "第一条笔记，第10页", 10);
+    store.addBookNote(book.id, "第二条笔记，第20页", 20);
+    const notes = store.listBookNotes(book.id);
+    assert.equal(notes.length, 2);
+    assert.equal(notes[0].text, "第二条笔记，第20页", "应该是最新添加的排在最前面");
+    assert.equal(store.countBookNotes(book.id), 2);
+  });
+
+  test("删除单条笔记不影响其它笔记和书本身", () => {
+    const book = store.addBook({ title: "三体" });
+    const n1 = store.addBookNote(book.id, "笔记一");
+    store.addBookNote(book.id, "笔记二");
+    store.removeBookNote(n1.id);
+    assert.equal(store.listBookNotes(book.id).length, 1);
+    assert.ok(store.findBook(book.id));
+  });
+
+  test("不同书的笔记互不干扰", () => {
+    const bookA = store.addBook({ title: "书A" });
+    const bookB = store.addBook({ title: "书B" });
+    store.addBookNote(bookA.id, "A的笔记");
+    store.addBookNote(bookB.id, "B的笔记1");
+    store.addBookNote(bookB.id, "B的笔记2");
+    assert.equal(store.listBookNotes(bookA.id).length, 1);
+    assert.equal(store.listBookNotes(bookB.id).length, 2);
+  });
+});
+
+describe("读书笔记：最近读完趋势图数据", () => {
+  test("按月份分桶统计读完数量，没有读完记录的月份是0", () => {
+    const book1 = store.addBook({ title: "书1" });
+    store.updateBook(book1.id, { status: "读完", finishedAt: "2026-08-05" });
+    const book2 = store.addBook({ title: "书2" });
+    store.updateBook(book2.id, { status: "读完", finishedAt: "2026-09-01" });
+
+    const series = store.listBooksFinishedSeries(3, "2026-09-16");
+    assert.equal(series.length, 3);
+    assert.equal(series[series.length - 1].month, "2026-09");
+    assert.equal(series[series.length - 1].count, 1);
+    assert.equal(series[series.length - 2].month, "2026-08");
+    assert.equal(series[series.length - 2].count, 1);
+    assert.equal(series[0].count, 0);
   });
 });

@@ -73,7 +73,45 @@
         },
         lastBackupAt: null,
         lastManualSaveAt: null,
+        // 外观：字体字号（用整页 zoom 缩放实现，不用重写全站的 px 字号）+ 白天/夜间（护眼）主题。
+        // 同样是后加字段，不进 isValidDataShape 的 required；见下面 mergeSettingsDefaults 的注释。
+        fontScale: "medium",
+        theme: "day",
+        // 用户自己的昵称/头像，跟"万象簿"这个软件本身的名字是两回事——软件改名之后
+        // 侧边栏顶部显示的是软件图标+软件名，这里的 profile 是"用这个软件的人"的身份。
+        // avatarImage：用户从相册上传的头像照片，压缩后存成一段 data URL 字符串；
+        // 为 null 时表示"没有上传照片，用下面 avatar 这个 emoji"。两者都存着，
+        // 上传照片只是优先显示，不会覆盖/丢失用户之前选的 emoji，方便随时切回去。
+        profile: { name: "", avatar: "🙂", avatarImage: null },
       },
+      // 读书笔记：一本书一条记录（书名/作者/状态/评分/起止日期），notes 是挂在某本书下面的
+      // 一条条读书笔记/摘录（可选页码）。两个都是后加的顶层字段，不进 isValidDataShape 的 required。
+      books: [],
+      bookNotes: [],
+    };
+  }
+
+  const FONT_SCALES = ["small", "medium", "large", "xlarge"];
+  const THEMES = ["day", "night"];
+  const AVATAR_OPTIONS = ["🙂", "😺", "🐶", "🦊", "🐼", "🐧", "🦉", "🐢", "🐨", "🌊", "🌿", "⭐"];
+  const APP_NAME = "万象簿";
+  const BOOK_STATUSES = ["想读", "在读", "读完"];
+
+  /**
+   * 把老存档里的 settings 和 defaultState() 里新增的 settings 子字段做一次"深合并"。
+   * 光靠 init() 里那句 `{...defaultState(), ...parsed}` 是不够的——那是浅合并，只要老存档
+   * 里已经有 settings 这个 key（从第一版就有），parsed.settings 就会把 defaultState().settings
+   * 整个替换掉，字体字号/主题/个人资料这些新加的子字段在老存档里根本不存在，会直接变成
+   * undefined，而不是拿到默认值。所以 settings 内部要单独再合并一层。
+   */
+  function mergeSettingsDefaults(parsedSettings) {
+    const base = defaultState().settings;
+    const incoming = parsedSettings || {};
+    return {
+      ...base,
+      ...incoming,
+      homeCards: { ...base.homeCards, ...(incoming.homeCards || {}) },
+      profile: { ...base.profile, ...(incoming.profile || {}) },
     };
   }
 
@@ -116,6 +154,7 @@
         const parsed = JSON.parse(raw);
         if (isValidDataShape(parsed)) {
           state = { ...defaultState(), ...parsed };
+          state.settings = mergeSettingsDefaults(parsed.settings);
         } else {
           state = defaultState();
           persist();
@@ -1064,9 +1103,95 @@
       return state.games.find((g) => g.id === id) || null;
     }
 
+    // ---------- 读书笔记 ----------
+    function addBook({ title, author, status, rating }) {
+      const book = {
+        id: uuid(),
+        title,
+        author: author || "",
+        status: BOOK_STATUSES.includes(status) ? status : "想读",
+        rating: rating ? Number(rating) : null,
+        createdAt: new Date().toISOString(),
+      };
+      state.books.push(book);
+      persist();
+      return book;
+    }
+    function updateBook(id, patch) {
+      const book = state.books.find((b) => b.id === id);
+      if (!book) return null;
+      const next = { ...patch };
+      if ("status" in next && !BOOK_STATUSES.includes(next.status)) delete next.status;
+      if ("rating" in next) next.rating = next.rating ? Math.min(5, Math.max(1, Number(next.rating))) : null;
+      // 状态改成"读完"且之前没记录过完成日期时，自动盖个今天的时间戳，用于读完趋势统计；
+      // 后续再手动改成别的状态不会清掉这个日期（保留"曾经读完过"的历史）。
+      if (next.status === "读完" && !book.finishedAt && !next.finishedAt) next.finishedAt = new Date().toISOString().slice(0, 10);
+      Object.assign(book, next);
+      persist();
+      return book;
+    }
+    function removeBook(id) {
+      state.books = state.books.filter((b) => b.id !== id);
+      state.bookNotes = state.bookNotes.filter((n) => n.bookId !== id);
+      persist();
+    }
+    function listBooks(status) {
+      const all = [...state.books].sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+      return status && status !== "全部" ? all.filter((b) => b.status === status) : all;
+    }
+    function findBook(id) {
+      return state.books.find((b) => b.id === id) || null;
+    }
+    function addBookNote(bookId, text, page) {
+      const note = {
+        id: uuid(),
+        bookId,
+        text,
+        page: page || null,
+        createdAt: new Date().toISOString(),
+      };
+      state.bookNotes.push(note);
+      persist();
+      return note;
+    }
+    function removeBookNote(id) {
+      state.bookNotes = state.bookNotes.filter((n) => n.id !== id);
+      persist();
+    }
+    function listBookNotes(bookId) {
+      // 用数组本身的插入顺序倒转来实现"最新在前"，不用 createdAt 时间戳排序——
+      // 两条笔记如果在同一毫秒内连续添加（比如自动化测试里），时间戳会完全相同，
+      // 排序结果就不可靠了；数组的插入顺序本身就是绝对可靠的先后关系。
+      return state.bookNotes.filter((n) => n.bookId === bookId).reverse();
+    }
+    function countBookNotes(bookId) {
+      return state.bookNotes.filter((n) => n.bookId === bookId).length;
+    }
+    /** 最近12个月，每月读完的书数量——首页/读书笔记页的小柱状图用。 */
+    function listBooksFinishedSeries(months = 6, refDate = todayStr()) {
+      const anchor = new Date(refDate + "T00:00:00");
+      const buckets = [];
+      for (let i = months - 1; i >= 0; i--) {
+        const d = new Date(anchor.getFullYear(), anchor.getMonth() - i, 1);
+        buckets.push({ month: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`, count: 0 });
+      }
+      const map = new Map(buckets.map((b) => [b.month, b]));
+      state.books.forEach((b) => {
+        if (b.status !== "读完" || !b.finishedAt) return;
+        const month = String(b.finishedAt).slice(0, 7);
+        const bucket = map.get(month);
+        if (bucket) bucket.count += 1;
+      });
+      return buckets;
+    }
+
     // ---------- 设置 ----------
     function getSettings() {
-      return { ...state.settings, homeCards: { ...state.settings.homeCards } };
+      return {
+        ...state.settings,
+        homeCards: { ...state.settings.homeCards },
+        profile: { ...state.settings.profile },
+      };
     }
     function updateHomeCardVisibility(key, visible) {
       state.settings.homeCards[key] = visible;
@@ -1075,6 +1200,28 @@
     function setLastBackupAt(iso) {
       state.settings.lastBackupAt = iso;
       persist();
+    }
+    /** 字体字号：small/medium/large/xlarge 四档，非法值直接忽略（不写入、不报错）。 */
+    function setFontScale(scale) {
+      if (!FONT_SCALES.includes(scale)) return;
+      state.settings.fontScale = scale;
+      persist();
+    }
+    /** 白天/夜间（护眼）主题。 */
+    function setTheme(theme) {
+      if (!THEMES.includes(theme)) return;
+      state.settings.theme = theme;
+      persist();
+    }
+    function toggleTheme() {
+      setTheme(state.settings.theme === "day" ? "night" : "day");
+      return state.settings.theme;
+    }
+    /** 更新个人资料（昵称/头像），patch 里只传要改的字段就行，另一个字段保持不变。 */
+    function updateProfile(patch) {
+      state.settings.profile = { ...state.settings.profile, ...patch };
+      persist();
+      return { ...state.settings.profile };
     }
     /**
      * 手动保存：平时每次增删改都会自动存进 localStorage，这个函数是给用户一个"我手动点了保存"的
@@ -1104,6 +1251,7 @@
         throw new Error("备份文件的数据结构不完整");
       }
       state = { ...defaultState(), ...parsed.data };
+      state.settings = mergeSettingsDefaults(parsed.data.settings);
       setLastBackupAt(new Date().toISOString());
       persist();
     }
@@ -1135,8 +1283,12 @@
       addAccount, updateAccount, removeAccount, listAccounts, getAccountBalance, listAccountsWithBalance,
       getExchangeRates, setExchangeRate, CURRENCIES,
       addGame, updateGame, removeGame, listGames, addPlaySession, listSessions, totalMinutesForGame,
-      listGamePlaytimeSeries, listTopPlayedGames,
+      listGamePlaytimeSeries, listTopPlayedGames, findGame,
+      addBook, updateBook, removeBook, listBooks, findBook,
+      addBookNote, removeBookNote, listBookNotes, countBookNotes, listBooksFinishedSeries,
       getSettings, updateHomeCardVisibility, setLastBackupAt, manualSave,
+      setFontScale, setTheme, toggleTheme, updateProfile,
+      FONT_SCALES, THEMES, AVATAR_OPTIONS, BOOK_STATUSES,
       exportBackup, importBackup, resetAll,
     };
   }
@@ -1151,5 +1303,8 @@
   /** 应用运行时使用的默认单例，基于浏览器的 localStorage。 */
   const store = createStore(browserLocalStorageAdapter());
 
-  return { STORAGE_KEY, SCHEMA_VERSION, createStore, store };
+  return {
+    STORAGE_KEY, SCHEMA_VERSION, createStore, store,
+    FONT_SCALES, THEMES, AVATAR_OPTIONS, APP_NAME, BOOK_STATUSES,
+  };
 });

@@ -36,3 +36,21 @@ export async function fillModal(page, values) {
 export async function submitModal(page) {
   await page.locator(".modal-box button[type=submit]").click();
 }
+
+/**
+ * 等到某个 locator 的文字匹配上给定的正则，再往下走——用来读那些"数字会先滚动播放
+ * 一小段动画才停在最终值"的地方（比如记账页收入/支出/结余的里程表效果），
+ * 不能像普通文字那样点击完立刻同步读到最终结果，要轮询等它播完。
+ */
+export async function waitForText(locator, pattern, timeout = 3000) {
+  const target = locator.first();
+  await target.waitFor();
+  const deadline = Date.now() + timeout;
+  let lastText = "";
+  while (Date.now() < deadline) {
+    lastText = await target.innerText();
+    if (pattern.test(lastText)) return lastText;
+    await target.page().waitForTimeout(30);
+  }
+  throw new Error(`等待文字匹配 ${pattern} 超时，最后一次读到的内容是：${JSON.stringify(lastText)}`);
+}

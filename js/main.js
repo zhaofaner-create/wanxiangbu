@@ -2,8 +2,11 @@
   "use strict";
   var require = global.__fanerRequire;
 
-  var store = require("./store.js").store;
+  var storeModule = require("./store.js");
+  var store = storeModule.store;
+  var APP_NAME = storeModule.APP_NAME;
   var renderQuickMemo = require("./components/quickMemo.js").renderQuickMemo;
+  var initCardTilt = require("./components/tilt.js").initCardTilt;
 
   var home = require("./modules/home.js");
   var todayPlan = require("./modules/todayPlan.js");
@@ -13,16 +16,18 @@
   var inventory = require("./modules/inventory.js");
   var finance = require("./modules/finance.js");
   var games = require("./modules/games.js");
+  var readingNotes = require("./modules/readingNotes.js");
+  var profile = require("./modules/profile.js");
   var settings = require("./modules/settings.js");
 
-  const MODULES = [home, todayPlan, studyTasks, reminders, mealPlan, inventory, finance, games, settings];
+  const MODULES = [home, todayPlan, studyTasks, reminders, mealPlan, inventory, finance, games, readingNotes, profile, settings];
 
   // 侧边导航按"日常/学习/生活/系统"分组展示，比一长条平铺的列表更容易一眼找到东西。
   const NAV_GROUPS = [
     { title: "日常", moduleIds: ["home", "todayPlan"] },
     { title: "学习", moduleIds: ["studyTasks", "reminders"] },
-    { title: "生活", moduleIds: ["mealPlan", "inventory", "finance", "games"] },
-    { title: "系统", moduleIds: ["settings"] },
+    { title: "生活", moduleIds: ["mealPlan", "inventory", "finance", "games", "readingNotes"] },
+    { title: "系统", moduleIds: ["profile", "settings"] },
   ];
 
   // 每个模块前面的小图标，纯内联 SVG（线性图标风格，统一描边粗细），不依赖任何外部图标库/字体，
@@ -36,6 +41,8 @@
     inventory: '<path d="M4 8.5 12 4l8 4.5-8 4.5-8-4.5Z"/><path d="M4 8.5V16l8 4.5 8-4.5V8.5"/><path d="M12 13v7.5"/>',
     finance: '<rect x="3.5" y="6.5" width="17" height="12" rx="2"/><path d="M3.5 10h17"/><circle cx="16.5" cy="14.5" r="1.4"/>',
     games: '<rect x="3" y="8" width="18" height="9" rx="4"/><path d="M8 10.5v4M6 12.5h4"/><circle cx="16" cy="11.5" r="1"/><circle cx="18.2" cy="13.7" r="1"/>',
+    readingNotes: '<path d="M4 5.5c2.4-1 5-1 7 .3v13c-2-1.3-4.6-1.3-7-.3v-13Z"/><path d="M20 5.5c-2.4-1-5-1-7 .3v13c2-1.3 4.6-1.3 7-.3v-13Z"/>',
+    profile: '<circle cx="12" cy="8.3" r="3.3"/><path d="M5.5 19.5c1.2-3.3 4-5 6.5-5s5.3 1.7 6.5 5"/>',
     settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 13.5a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.9 2.9l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.9-2.9l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.6-1h-.2a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1.1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.9-2.9l.1.1a1.7 1.7 0 0 0 1.9.3h.1a1.7 1.7 0 0 0 1-1.6v-.2a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.6h.1a1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.9 2.9l-.1.1a1.7 1.7 0 0 0-.3 1.9v.1a1.7 1.7 0 0 0 1.6 1h.2a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.6 1Z"/>',
   };
   // 每个模块一个新鲜、柔和的渐变配色（天蓝/薄荷/薰衣草/珊瑚/杏橙/青绿/藕紫/浅灰蓝……），
@@ -50,6 +57,8 @@
     inventory: ["hsl(188, 70%, 66%)", "hsl(188, 60%, 50%)"],
     finance: ["hsl(226, 72%, 76%)", "hsl(226, 60%, 60%)"],
     games: ["hsl(330, 76%, 78%)", "hsl(330, 60%, 64%)"],
+    readingNotes: ["hsl(266, 62%, 80%)", "hsl(266, 45%, 64%)"],
+    profile: ["hsl(198, 70%, 76%)", "hsl(198, 55%, 58%)"],
     settings: ["hsl(215, 18%, 74%)", "hsl(215, 16%, 56%)"],
   };
   function navIconSvg(id) {
@@ -63,8 +72,61 @@
   const topbarTitleEl = document.getElementById("topbar-title");
   const topbarSubtitleEl = document.getElementById("topbar-subtitle");
   const topbarActionsEl = document.getElementById("topbar-actions");
+  const appShellEl = document.querySelector(".app-shell");
+  const menuToggleEl = document.getElementById("menu-toggle");
+  const navBackdropEl = document.getElementById("nav-backdrop");
+  const themeToggleEl = document.getElementById("theme-toggle");
+  const appBrandNameEl = document.querySelector(".app-brand-name");
+  const sidebarProfileEl = document.getElementById("sidebar-profile");
+  const sidebarProfileAvatarEl = document.getElementById("sidebar-profile-avatar");
+  const sidebarProfileNameEl = document.getElementById("sidebar-profile-name");
+
+  if (appBrandNameEl) appBrandNameEl.textContent = APP_NAME;
 
   let activeId = "home";
+
+  /** 侧边栏底部的"这个人是谁"小条：显示当前用户自己设置的头像/昵称，点一下跳去个人信息页编辑。 */
+  function renderSidebarProfile() {
+    const profile = store.getSettings().profile;
+    sidebarProfileAvatarEl.innerHTML = "";
+    if (profile.avatarImage) {
+      const img = document.createElement("img");
+      img.src = profile.avatarImage;
+      img.alt = "头像";
+      sidebarProfileAvatarEl.appendChild(img);
+    } else {
+      sidebarProfileAvatarEl.textContent = profile.avatar || "🙂";
+    }
+    sidebarProfileNameEl.textContent = profile.name || "设置昵称";
+  }
+  if (sidebarProfileEl) sidebarProfileEl.addEventListener("click", () => navigateTo("profile"));
+
+  // 字体字号：不重写全站的 px 字号，直接对整个页面做 zoom 缩放（等价于浏览器自带的
+  // "页面缩放"，vh/vw 等相对单位都会跟着一起正确缩放，不会破坏任何现有布局）。
+  const FONT_SCALE_ZOOM = { small: 0.9, medium: 1, large: 1.125, xlarge: 1.25 };
+
+  /** 把当前存储的外观设置（字号/主题）应用到页面上；每次改动之后都要调用一次。 */
+  function applyAppearance() {
+    const s = store.getSettings();
+    document.documentElement.style.zoom = String(FONT_SCALE_ZOOM[s.fontScale] || 1);
+    document.documentElement.setAttribute("data-theme", s.theme === "night" ? "night" : "day");
+  }
+
+  if (themeToggleEl) {
+    themeToggleEl.addEventListener("click", () => {
+      store.toggleTheme();
+      applyAppearance();
+    });
+  }
+
+  // 手机宽度下侧边栏收成可滑出的抽屉：这里只是控制一个 CSS class 的开关，
+  // 具体的"藏起来/滑出来"效果全部由 style.css 的媒体查询决定，桌面/平板宽度下
+  // 这个 class 不会触发任何视觉变化（对应的 CSS 规则只在 ≤640px 生效）。
+  function openNav() { appShellEl.classList.add("nav-open"); }
+  function closeNav() { appShellEl.classList.remove("nav-open"); }
+  function toggleNav() { appShellEl.classList.toggle("nav-open"); }
+  if (menuToggleEl) menuToggleEl.addEventListener("click", toggleNav);
+  if (navBackdropEl) navBackdropEl.addEventListener("click", closeNav);
 
   function setTopbar(title, subtitle) {
     topbarTitleEl.textContent = title;
@@ -87,6 +149,9 @@
         const btn = document.createElement("button");
         btn.type = "button";
         btn.className = "nav-item" + (mod.meta.id === activeId ? " active" : "");
+        // title 属性：平板宽度下侧边栏收窄成纯图标条、不显示文字名称，
+        // 鼠标悬浮在图标上时靠浏览器原生 tooltip 显示模块名，帮助识别。
+        btn.title = mod.meta.label;
         btn.innerHTML = `${navIconSvg(mod.meta.id)}<span>${mod.meta.label}</span>`;
         btn.addEventListener("click", () => navigateTo(mod.meta.id));
         groupEl.appendChild(btn);
@@ -106,12 +171,16 @@
     const mod = MODULES.find((m) => m.meta.id === id) || home;
     renderNav();
     renderTopbarActions();
+    renderSidebarProfile();
+    closeNav(); // 手机端选完一个模块后自动收起抽屉；桌面/平板下没有视觉效果，调用无害
     // 标记当前活跃模块，供模块内部的计时器/轮询逻辑判断"用户是不是已经切换到别的页面了"，
     // 避免离开今日计划/学习任务页面之后，之前设的定时器还在后台偷偷刷新一个已经看不到的页面。
     contentEl.dataset.activeModuleId = mod.meta.id;
-    mod.render(contentEl, store, { navigateTo, setTopbar });
+    mod.render(contentEl, store, { navigateTo, setTopbar, applyAppearance, refreshShell: renderSidebarProfile });
   }
 
   store.init();
+  applyAppearance();
+  initCardTilt();
   navigateTo("home");
 })(typeof window !== "undefined" ? window : globalThis);

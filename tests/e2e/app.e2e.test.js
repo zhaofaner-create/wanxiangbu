@@ -4,7 +4,7 @@
 import { test, describe, before, after, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { chromium } from "playwright";
-import { gotoApp, goToModule, fillModal, submitModal } from "./helpers.js";
+import { gotoApp, goToModule, fillModal, submitModal, waitForText } from "./helpers.js";
 
 let browser;
 let context;
@@ -31,12 +31,12 @@ afterEach(async () => {
 });
 
 describe("整体框架", () => {
-  test("加载后默认停在首页，导航栏有9个模块入口，且没有任何登录界面（PRD验收标准2：免登录）", async () => {
+  test("加载后默认停在首页，导航栏有11个模块入口，且没有任何登录界面（PRD验收标准2：免登录）", async () => {
     await assert.doesNotReject(page.waitForSelector(".topbar-title"));
     const title = await page.locator("#topbar-title").innerText();
     assert.equal(title, "首页总览");
     const navCount = await page.locator(".nav-item").count();
-    assert.equal(navCount, 9);
+    assert.equal(navCount, 11); // 9个原有模块 + 读书笔记 + 个人信息
     assert.equal(await page.locator('input[type=password]').count(), 0);
     assert.equal(await page.locator("text=登录").count(), 0);
   });
@@ -55,8 +55,8 @@ describe("整体框架", () => {
     const expected = {
       "日常": ["首页总览", "今日计划"],
       "学习": ["学习任务", "提醒事项"],
-      "生活": ["饮食计划", "库存管理", "个人记账", "游戏娱乐"],
-      "系统": ["数据与设置"],
+      "生活": ["饮食计划", "库存管理", "个人记账", "游戏娱乐", "读书笔记"],
+      "系统": ["个人信息", "数据与设置"],
     };
     for (let i = 0; i < 4; i++) {
       const group = groups.nth(i);
@@ -495,7 +495,7 @@ describe("个人记账（PRD验收标准7）", () => {
     await submitModal(page);
 
     const expenseCard = page.locator(".card", { hasText: "支出" }).first();
-    assert.match(await expenseCard.innerText(), /¥58/);
+    await waitForText(expenseCard, /¥58/); // 金额有滚动计数动画，要等它播完再读最终值
     await assert.doesNotReject(page.locator(".list-row", { hasText: "超市买菜" }).waitFor());
   });
 
@@ -523,7 +523,7 @@ describe("个人记账（PRD验收标准7）", () => {
 
     // 月度支出汇总应该把之前记的58元人民币和这次的80元人民币等值加在一起。
     const expenseCard = page.locator(".card", { hasText: "支出" }).first();
-    assert.match(await expenseCard.innerText(), /¥138/);
+    await waitForText(expenseCard, /¥138/);
     assert.deepEqual(networkViolations, []); // 全程没有为了"实时汇率"发起任何网络请求
   });
 
@@ -552,7 +552,7 @@ describe("个人记账（PRD验收标准7）", () => {
     assert.match(await page.locator(".list-row", { hasText: "超市买菜和日用品" }).innerText(), /¥88/);
 
     const expenseCard = page.locator(".card", { hasText: "支出" }).first();
-    assert.match(await expenseCard.innerText(), /¥88/); // 汇总也应该反映改后的88元，而不是原来的58元
+    await waitForText(expenseCard, /¥88/); // 汇总也应该反映改后的88元，而不是原来的58元
   });
 });
 

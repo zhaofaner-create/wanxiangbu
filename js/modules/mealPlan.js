@@ -130,7 +130,7 @@
     return h("div", { style: "display:flex;flex-direction:column;gap:14px;" }, [
       nav,
       generateMessage ? h("div", { class: "empty-hint", style: "text-align:left;" }, generateMessage) : null,
-      table,
+      h("div", { class: "table-scroll" }, table),
     ]);
   }
 

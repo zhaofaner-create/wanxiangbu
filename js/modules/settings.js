@@ -14,6 +14,7 @@
 
   const { h, mount } = require("../components/dom.js");
   const { openConfirm } = require("../components/confirm.js");
+  const { createSegmented } = require("../components/segmented.js");
 
   const meta = { id: "settings", label: "数据与设置", title: "数据与设置", subtitle: "备份恢复与基础设置" };
 
@@ -21,6 +22,17 @@
     study: "学习任务", reminders: "提醒事项", meal: "饮食计划",
     inventory: "库存管理", finance: "个人记账", games: "游戏娱乐",
   };
+
+  const FONT_SCALE_LABELS = [
+    { key: "small", label: "小" },
+    { key: "medium", label: "标准" },
+    { key: "large", label: "大" },
+    { key: "xlarge", label: "特大" },
+  ];
+  const THEME_LABELS = [
+    { key: "day", label: "☀️ 白天" },
+    { key: "night", label: "🌙 夜间" },
+  ];
 
   // 每张卡片标题前的小图标，跟侧边导航一样用内联 SVG，不额外依赖图标字体/CDN；
   // 配色也跟侧边导航同一套"新鲜柔和渐变"语言，白色线条图标叠在色块上。
@@ -123,6 +135,31 @@
       ]),
     ]);
 
+    const appearanceCard = h("div", { class: "card" }, [
+      cardHeading("grid", "外观"),
+      h("div", { class: "settings-card-desc" }, "字体字号和白天/夜间模式；夜间模式在顶栏右上角也有个快捷按钮可以随时切换。"),
+      h("div", { style: "display:flex;flex-direction:column;gap:12px;" }, [
+        h("div", {}, [
+          h("div", { class: "field-label", style: "margin-bottom:6px;" }, "字体字号"),
+          createSegmented({
+            kind: "tabs",
+            options: FONT_SCALE_LABELS,
+            activeKey: settings.fontScale,
+            onSelect: (key) => { store.setFontScale(key); ctx.applyAppearance(); },
+          }).el,
+        ]),
+        h("div", {}, [
+          h("div", { class: "field-label", style: "margin-bottom:6px;" }, "主题模式"),
+          createSegmented({
+            kind: "tabs",
+            options: THEME_LABELS,
+            activeKey: settings.theme,
+            onSelect: (key) => { store.setTheme(key); ctx.applyAppearance(); },
+          }).el,
+        ]),
+      ]),
+    ]);
+
     const homeCardsCard = h("div", { class: "card" }, [
       cardHeading("grid", "首页摘要显示"),
       h("div", { class: "settings-card-desc" }, "关掉不常看的模块，首页只留下你在意的摘要卡片。"),
@@ -162,6 +199,7 @@
         ]),
         h("div", { class: "settings-col" }, [
           h("div", { class: "settings-section-label" }, "偏好设置"),
+          appearanceCard,
           homeCardsCard,
         ]),
       ]),

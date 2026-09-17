@@ -69,6 +69,72 @@
   --g-shadow-tight: 0 1px 1px rgba(46, 58, 74, 0.05), 0 2px 6px rgba(46, 58, 74, 0.06);
 }
 
+/* ============================================================================
+   夜间（护眼）主题 —— 同一套液态玻璃材质系统，只换一份变量取值，不是另外
+   写一套皮肤：暖色调、低亮度、避免纯黑或高对比蓝光，玻璃材质从"透光的白玻璃"
+   变成"透光的深色烟灰玻璃"，环境层光斑也调暗调冷，整体保持"宁静"而不是刺眼。
+   ============================================================================ */
+:root[data-theme="night"] {
+  --accent: hsl(202, 55%, 64%);
+  --accent-dark: hsl(202, 65%, 78%);
+  --accent-soft: hsla(202, 55%, 60%, 0.2);
+  --accent-soft-text: hsl(202, 70%, 80%);
+  --accent-line: hsla(202, 55%, 62%, 0.45);
+
+  --text-primary: #e8eaee;
+  --text-secondary: #b6bcc6;
+  --text-muted: #838993;
+
+  --danger: #e29aa8;
+  --danger-soft: hsla(350, 55%, 62%, 0.18);
+  --success: #86d4ae;
+  --success-soft: hsla(152, 45%, 58%, 0.18);
+  --warning-dot: #e5ac74;
+
+  --g-saturate: 140%;
+  --g-brightness: 0.92;
+
+  --g-tint-clear: rgba(255, 255, 255, 0.07);
+  --g-tint-clear-strong: rgba(255, 255, 255, 0.12);
+  --g-tint-regular: rgba(42, 46, 54, 0.66);
+  --g-tint-frosted: rgba(32, 35, 42, 0.86);
+
+  --g-edge: rgba(255, 255, 255, 0.16);
+  --g-edge-soft: rgba(255, 255, 255, 0.09);
+  --g-hairline: rgba(255, 255, 255, 0.09);
+
+  --g-iris-edge: linear-gradient(90deg, hsla(28, 55%, 48%, 0.4), hsla(200, 55%, 52%, 0.35) 48%, hsla(275, 42%, 55%, 0.32) 100%);
+
+  --g-shadow-ambient: 0 18px 44px rgba(0, 0, 0, 0.45), 0 4px 12px rgba(0, 0, 0, 0.3);
+  --g-shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.28), 0 8px 20px rgba(0, 0, 0, 0.24);
+  --g-shadow-tight: 0 1px 1px rgba(0, 0, 0, 0.22), 0 2px 6px rgba(0, 0, 0, 0.2);
+}
+:root[data-theme="night"] body {
+  background:
+    radial-gradient(1300px 1000px at 90% -8%, hsla(28, 55%, 30%, 0.32), transparent 60%),
+    radial-gradient(1100px 900px at 4% 14%, hsla(205, 55%, 26%, 0.32), transparent 58%),
+    radial-gradient(1250px 950px at 46% 122%, hsla(190, 45%, 22%, 0.28), transparent 62%),
+    radial-gradient(850px 760px at 72% 52%, hsla(280, 38%, 24%, 0.26), transparent 65%),
+    radial-gradient(700px 620px at 22% 78%, hsla(150, 38%, 20%, 0.2), transparent 62%),
+    linear-gradient(160deg, #1b1e24 0%, #17191f 45%, #14161a 100%);
+}
+:root[data-theme="night"] .field-input { background: rgba(255, 255, 255, 0.06); color: var(--text-primary); }
+:root[data-theme="night"] .field-input:focus { background: rgba(255, 255, 255, 0.1); }
+:root[data-theme="night"] .nav-item:hover { background: rgba(255, 255, 255, 0.08); }
+:root[data-theme="night"] .nav-item.active {
+  background: linear-gradient(180deg, rgba(255,255,255,0.14), rgba(255,255,255,0.05));
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.14), 0 1px 3px rgba(0,0,0,0.3);
+}
+:root[data-theme="night"] .summary-card:hover { background: rgba(255,255,255,0.08); }
+:root[data-theme="night"] .kanban-column { background: rgba(255, 255, 255, 0.05); }
+:root[data-theme="night"] .toggle-row:hover { background: rgba(255, 255, 255, 0.07); }
+:root[data-theme="night"] .quick-memo-item { background: rgba(255, 255, 255, 0.08); }
+:root[data-theme="night"] table.data-table th { background: rgba(255, 255, 255, 0.06); }
+:root[data-theme="night"] .meal-cell:hover { background: rgba(255, 255, 255, 0.07); }
+:root[data-theme="night"] .badge { background: rgba(255, 255, 255, 0.1); }
+:root[data-theme="night"] .tab-indicator { background: rgba(255, 255, 255, 0.16); }
+:root[data-theme="night"] .danger-card { background: rgba(60, 32, 36, 0.5); }
+
 * { box-sizing: border-box; }
 html, body { height: 100%; }
 
@@ -144,16 +210,29 @@ body::after {
 .sidebar {
   width: 224px;
   flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
   background: var(--g-tint-regular);
   -webkit-backdrop-filter: blur(var(--g-blur-regular)) saturate(var(--g-saturate)) brightness(var(--g-brightness));
   backdrop-filter: blur(var(--g-blur-regular)) saturate(var(--g-saturate)) brightness(var(--g-brightness));
   border-right: 1px solid var(--g-hairline);
   box-shadow: inset -1px 0 0 var(--g-edge-soft);
-  padding: 22px 0;
-  overflow-y: auto;
+  padding: 18px 0;
   position: relative;
   z-index: 5;
 }
+/* 软件的品牌标识：一个小小的液态玻璃图标 tile + 名字，代替原来纯文字的"凡尔的APP"。 */
+.app-brand { display: flex; align-items: center; gap: 10px; padding: 0 20px 18px 20px; flex-shrink: 0; }
+.app-brand-icon {
+  width: 30px; height: 30px; border-radius: 9px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(135deg, hsl(205, 82%, 74%), hsl(190, 60%, 62%) 55%, hsl(258, 55%, 76%));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.55), 0 3px 9px rgba(30, 40, 55, 0.2);
+}
+.app-brand-icon svg { width: 17px; height: 17px; }
+.app-brand-name { font-size: 16px; font-weight: 700; letter-spacing: -0.01em; color: var(--text-primary); }
+/* nav-list 占满中间剩余空间、自己单独滚动，这样不管模块多少，底部的个人信息条永远贴底。 */
+.nav-list { display: flex; flex-direction: column; gap: 18px; flex: 1; overflow-y: auto; padding-bottom: 8px; }
 /* 顶边虹彩高光——和 topbar 的同一条高光在视觉上连成一条横贯窗口顶部的
    "液态玻璃棱边"，这是让材质看起来"是玻璃而不是磨砂塑料"的关键细节。 */
 .sidebar::before, .topbar::before {
@@ -163,8 +242,6 @@ body::after {
   background: var(--g-iris-edge);
   pointer-events: none;
 }
-.sidebar-title { padding: 0 20px 24px 20px; font-size: 16px; font-weight: 700; letter-spacing: -0.01em; color: var(--text-primary); }
-.nav-list { display: flex; flex-direction: column; gap: 18px; }
 .nav-group { display: flex; flex-direction: column; gap: 1px; }
 .nav-group-title {
   padding: 0 20px; margin-bottom: 6px;
@@ -175,7 +252,7 @@ body::after {
   padding: 6px 14px; margin: 0 8px; width: calc(100% - 16px);
   font-size: 13.5px; color: var(--text-secondary);
   cursor: pointer; border: none; border-radius: var(--radius-sm); background: none; text-align: left;
-  font-family: inherit; transition: background-color 0.15s ease, color 0.15s ease, transform 0.1s ease;
+  font-family: inherit; transition: background-color 0.15s ease, color 0.15s ease, transform 0.4s var(--spring-ease);
 }
 .nav-item:hover { background: rgba(255, 255, 255, 0.4); color: var(--text-primary); }
 .nav-item.active {
@@ -183,7 +260,7 @@ body::after {
   box-shadow: inset 0 0 0 1px rgba(255,255,255,0.6), 0 1px 3px rgba(46,58,74,0.1);
   font-weight: 600; color: var(--accent-dark);
 }
-.nav-item:active { transform: scale(0.98); }
+.nav-item:active { transform: scale(0.96); transition: transform 0.08s ease-out; }
 /* 图标改成"彩色圆角小图标"，每个模块一个新鲜、柔和的渐变色块（不是纯黑/深墨绿
    那种压抑的颜色），像 macOS 系统设置/提醒事项那样一眼能分辨模块，同时整套
    交互色（导航高亮/按钮/焦点）仍然只用同一个强调色，两者不冲突。 */
@@ -196,6 +273,48 @@ body::after {
 .nav-item:hover .nav-icon-tile { filter: brightness(1.05); }
 .nav-item.active .nav-icon-tile { box-shadow: inset 0 1px 0 rgba(255,255,255,0.55), 0 3px 9px rgba(30, 40, 55, 0.22); transform: scale(1.05); }
 .nav-icon { width: 15px; height: 15px; flex-shrink: 0; }
+
+/* 侧边栏底部的个人信息条：贴底显示，跟顶部的 nav-item 是同一种"可点击行"手感。 */
+.sidebar-profile {
+  display: flex; align-items: center; gap: 10px; flex-shrink: 0;
+  margin: 8px 10px 0 10px; padding: 10px 10px;
+  border-top: 1px solid var(--g-hairline);
+  border-radius: var(--radius-sm);
+  background: none; border-left: none; border-right: none; border-bottom: none;
+  cursor: pointer; font-family: inherit; text-align: left; width: calc(100% - 20px);
+  transition: background-color 0.15s ease;
+}
+.sidebar-profile:hover { background: rgba(255,255,255,0.4); }
+.profile-avatar {
+  width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center; font-size: 15px;
+  background: var(--g-tint-clear-strong);
+  box-shadow: inset 0 0 0 1px var(--g-edge-soft);
+  overflow: hidden;
+}
+/* 上传了照片时，圆形容器里放一张铺满、居中裁切的 <img>，代替 emoji 文本。 */
+.profile-avatar img, .profile-avatar-large img {
+  width: 100%; height: 100%; object-fit: cover; border-radius: 50%; display: block;
+}
+.sidebar-profile-name { font-size: 12.5px; color: var(--text-secondary); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 个人信息页：大号头像预览 + 头像选择格子 */
+.profile-avatar-large {
+  width: 56px; height: 56px; border-radius: 50%; flex-shrink: 0;
+  overflow: hidden;
+  display: flex; align-items: center; justify-content: center; font-size: 28px;
+  background: var(--g-tint-clear-strong);
+  box-shadow: inset 0 0 0 1px var(--g-edge-soft), var(--g-shadow-tight);
+}
+.avatar-option {
+  width: 40px; height: 40px; border-radius: 10px; font-size: 19px;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--g-edge-soft); background: var(--g-tint-clear);
+  cursor: pointer; transition: background-color 0.15s ease, box-shadow 0.15s ease, transform 0.1s ease;
+}
+.avatar-option:hover { background: var(--g-tint-clear-strong); }
+.avatar-option:active { transform: scale(0.94); }
+.avatar-option.active { box-shadow: 0 0 0 2px var(--accent-line), var(--g-shadow-tight); background: var(--accent-soft); }
 
 /* 主区域 */
 .main-area { flex-grow: 1; display: flex; flex-direction: column; min-width: 0; position: relative; z-index: 2; }
@@ -212,6 +331,30 @@ body::after {
 .topbar-title { font-size: 18px; font-weight: 700; letter-spacing: -0.01em; }
 .topbar-subtitle { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
 .topbar-actions { display: flex; align-items: center; gap: 10px; }
+
+/* 白天/夜间模式切换按钮：常驻显示在顶栏最右侧，跟汉堡菜单一样的 glass-clear 质感。
+   两个图标（太阳/月亮）都画出来，靠 data-theme 属性控制哪个显示、哪个隐藏，切换的
+   一瞬间做一个小小的旋转+淡入淡出，而不是生硬的图标跳变。 */
+.theme-toggle {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px; border-radius: var(--radius-sm); flex-shrink: 0;
+  margin-left: 10px; position: relative;
+  border: 1px solid var(--g-edge-soft);
+  background: var(--g-tint-clear);
+  -webkit-backdrop-filter: blur(var(--g-blur-clear)) saturate(var(--g-saturate));
+  backdrop-filter: blur(var(--g-blur-clear)) saturate(var(--g-saturate));
+  color: var(--text-secondary); cursor: pointer; font-family: inherit;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.theme-toggle:hover { background: var(--g-tint-clear-strong); color: var(--text-primary); }
+.theme-toggle-icon {
+  position: absolute; width: 18px; height: 18px;
+  transition: opacity 0.25s ease, transform 0.4s var(--spring-ease);
+}
+.theme-toggle .icon-sun { opacity: 1; transform: rotate(0deg) scale(1); color: hsl(38, 80%, 52%); }
+.theme-toggle .icon-moon { opacity: 0; transform: rotate(-60deg) scale(0.5); color: hsl(230, 40%, 62%); }
+:root[data-theme="night"] .theme-toggle .icon-sun { opacity: 0; transform: rotate(60deg) scale(0.5); }
+:root[data-theme="night"] .theme-toggle .icon-moon { opacity: 1; transform: rotate(0deg) scale(1); }
 .content-area {
   flex-grow: 1; overflow: auto; padding: 24px 30px;
   display: flex; flex-direction: column; gap: 16px;
@@ -230,10 +373,17 @@ body::after {
   backdrop-filter: blur(var(--g-blur-clear)) saturate(var(--g-saturate)) brightness(var(--g-brightness));
   box-shadow: inset 0 1px 0 var(--g-edge), var(--g-shadow-tight);
   color: var(--text-secondary); font-family: inherit;
-  transition: background-color 0.15s ease, box-shadow 0.15s ease, color 0.15s ease, transform 0.08s ease;
+  /* transform 的过渡时长/曲线写在"松开手"这一侧（也就是这条基础规则里）：按下的瞬间
+     要快、要干脆（见下面 .btn:active 自己的 transition），松开之后再弹簧式回弹过冲，
+     两段节奏不一样，才有"按下去有阻力、弹回来有回弹"的物理手感。 */
+  transition: background-color 0.15s ease, box-shadow 0.15s ease, color 0.15s ease, transform 0.42s var(--spring-ease);
 }
 .btn:hover { background: var(--g-tint-clear-strong); color: var(--text-primary); }
-.btn:active { transform: translateY(1px) scale(0.99); box-shadow: inset 0 1px 2px rgba(46,58,74,0.12); }
+.btn:active {
+  transform: scale(0.96);
+  transition: transform 0.08s ease-out, box-shadow 0.1s ease;
+  box-shadow: inset 0 1px 2px rgba(46,58,74,0.12);
+}
 .btn-primary {
   background: linear-gradient(180deg, hsl(202, 48%, 52%), hsl(202, 45%, 43%));
   color: #fff; border-color: hsla(202, 50%, 30%, 0.4);
@@ -252,6 +402,8 @@ body::after {
    卡片 / 列表 —— frosted-content 材质：内容承载层，优先保证可读性。
 --------------------------------------------------------------------------- */
 .card {
+  position: relative;
+  isolation: isolate;
   border: 1px solid var(--g-hairline); border-radius: var(--radius);
   background: var(--g-tint-frosted);
   -webkit-backdrop-filter: blur(var(--g-blur-frosted)) saturate(115%);
@@ -259,6 +411,55 @@ body::after {
   padding: 16px 18px;
   box-shadow: var(--g-shadow-soft);
 }
+/* 悬浮时的旋转渐变描边（Conic Gradient Border）：一条贴着卡片边缘的彩色细环，
+   平时不转、不显示，悬浮时才转起来——避免一整页卡片同时转会很吵。
+   关键是用双层 mask 异或出一个"环形镂空"：只留 2px 宽的边框那一圈可见，
+   不然整块 conic-gradient 会实心糊在卡片背后，透过半透明的磨砂玻璃背景大片
+   泛色，效果不是"描边"而是变成一大片色斑。
+   注意：转动效果不能用 transform: rotate() 让整个伪元素的方框转起来——
+   卡片大多是宽矩形（比如图表卡片），旋转整个方框会导致方框的四个角甩到
+   矩形外面很远的地方（旋转半径是对角线的一半，比矩形本身宽/高都大），
+   卡片又没有裁切（overflow:hidden 会把故意留白露出来的呼吸光晕和圆环也切掉），
+   甩出去的这部分描边会直接画到旁边、下面的其它卡片上，变成一条很违和的
+   斜线。正确做法是用 @property 注册一个可以被动画插值的角度自定义属性，
+   动画只改 conic-gradient 内部的起始角度，方框本身完全不转、不越界。 */
+@property --card-ring-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+.card::after {
+  content: "";
+  position: absolute; inset: -2px; z-index: -1; border-radius: inherit;
+  padding: 2px;
+  box-sizing: border-box;
+  background: conic-gradient(from var(--card-ring-angle), transparent 0%, hsla(202, 70%, 62%, 0.85) 14%, transparent 30%, transparent 68%, hsla(275, 55%, 70%, 0.8) 84%, transparent 100%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  opacity: 0;
+  transition: opacity 0.35s ease;
+  animation: card-ring-spin 5s linear infinite;
+  animation-play-state: paused;
+  pointer-events: none;
+}
+.card:hover::after { opacity: 1; animation-play-state: running; }
+@keyframes card-ring-spin { to { --card-ring-angle: 360deg; } }
+/* 底部呼吸弥散背光：悬浮时卡片下方泛出一小片柔和的光晕，缓慢地明暗呼吸。 */
+.card::before {
+  content: "";
+  position: absolute; left: 12%; right: 12%; bottom: -12px; height: 24px; z-index: -2;
+  background: radial-gradient(ellipse at center, hsla(202, 65%, 62%, 0.4), transparent 72%);
+  filter: blur(9px);
+  opacity: 0;
+  transition: opacity 0.4s ease;
+  animation: card-glow-breathe 2.6s ease-in-out infinite;
+  animation-play-state: paused;
+  pointer-events: none;
+}
+.card:hover::before { opacity: 1; animation-play-state: running; }
+@keyframes card-glow-breathe { 0%, 100% { opacity: 0.45; } 50% { opacity: 1; } }
 .card-title { font-size: 13px; font-weight: 700; color: var(--text-primary); margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; }
 .list-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--g-hairline); font-size: 13px; }
 .list-row:last-child { border-bottom: none; }
@@ -268,6 +469,20 @@ body::after {
 
 /* 摘要卡片网格（首页） */
 .summary-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+/* 卡片入场交错动画（Stagger Cascade）：每张卡片带一点弹性从下方轻轻滑入，
+   一个接一个错开一点点时间出现，而不是所有卡片同时"啪"地一起出现。 */
+@keyframes stagger-card-in {
+  from { opacity: 0; transform: translateY(10px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.summary-grid > * { animation: stagger-card-in 0.42s var(--spring-ease) both; }
+.summary-grid > *:nth-child(1) { animation-delay: 0.01s; }
+.summary-grid > *:nth-child(2) { animation-delay: 0.05s; }
+.summary-grid > *:nth-child(3) { animation-delay: 0.09s; }
+.summary-grid > *:nth-child(4) { animation-delay: 0.13s; }
+.summary-grid > *:nth-child(5) { animation-delay: 0.17s; }
+.summary-grid > *:nth-child(6) { animation-delay: 0.21s; }
+.summary-grid > *:nth-child(n+7) { animation-delay: 0.24s; }
 .summary-card {
   border: 1px solid var(--g-hairline); border-radius: var(--radius);
   background: var(--g-tint-frosted);
@@ -275,10 +490,10 @@ body::after {
   backdrop-filter: blur(var(--g-blur-frosted)) saturate(115%);
   padding: 15px 17px;
   cursor: pointer; text-align: left; font-family: inherit; box-shadow: var(--g-shadow-soft);
-  transition: box-shadow 0.18s ease, transform 0.18s ease, background-color 0.18s ease;
+  transition: box-shadow 0.18s ease, transform 0.4s var(--spring-ease), background-color 0.18s ease;
 }
 .summary-card:hover { background: rgba(255,255,255,0.9); box-shadow: var(--g-shadow-ambient); transform: translateY(-2px); }
-.summary-card:active { transform: translateY(0); }
+.summary-card:active { transform: translateY(0) scale(0.97); transition: transform 0.08s ease-out; }
 .summary-card-title { font-size: 12px; font-weight: 600; color: var(--text-muted); margin-bottom: 7px; }
 .summary-card-main { font-size: 13.5px; color: var(--text-primary); font-weight: 500; }
 .summary-card-sub { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
@@ -450,9 +665,10 @@ body::after {
   position: relative; z-index: 1;
   padding: 6px 15px; border-radius: var(--radius-sm); font-size: 13px; font-weight: 500;
   border: none; background: transparent; color: var(--text-secondary); cursor: pointer; font-family: inherit;
-  transition: color 0.15s ease;
+  transition: color 0.15s ease, transform 0.4s var(--spring-ease);
 }
 .tab-btn:hover { color: var(--text-primary); }
+.tab-btn:active { transform: scale(0.94); transition: transform 0.08s ease-out; }
 .tab-btn.active { color: var(--text-primary); font-weight: 600; }
 
 .pill-group { position: relative; display: inline-flex; gap: 8px; flex-wrap: wrap; align-items: center; }
@@ -471,8 +687,10 @@ body::after {
   background: var(--g-tint-clear);
   -webkit-backdrop-filter: blur(var(--g-blur-clear)) saturate(var(--g-saturate));
   backdrop-filter: blur(var(--g-blur-clear)) saturate(var(--g-saturate));
-  color: var(--text-secondary); cursor: pointer; font-family: inherit; transition: color 0.15s ease, background-color 0.15s ease;
+  color: var(--text-secondary); cursor: pointer; font-family: inherit;
+  transition: color 0.15s ease, background-color 0.15s ease, transform 0.4s var(--spring-ease);
 }
+.pill:active { transform: scale(0.94); transition: transform 0.08s ease-out; }
 .pill:hover { background: var(--g-tint-clear-strong); color: var(--text-primary); }
 .pill.active { background: transparent; color: #fff; border-color: transparent; }
 
@@ -556,4 +774,142 @@ table.data-table th { background: rgba(255,255,255,0.5); font-weight: 700; color
 .danger-card { border-color: hsla(350, 55%, 55%, 0.3); background: rgba(255, 250, 250, 0.7); }
 @media (max-width: 720px) {
   .settings-grid { grid-template-columns: 1fr; }
+}
+
+/* ============================================================================
+   响应式布局 —— 平板 / 手机适配
+   ----------------------------------------------------------------------------
+   设计原则：功能与桌面版完全一致（同样的模块、同样的操作、同样的数据），
+   只随屏幕宽度调整"布局密度"和"导航呈现方式"；液态玻璃材质、强调色、
+   弹簧动画分段控件在所有尺寸下保持不变，不因为屏幕小就换一套视觉语言。
+
+   断点：
+     > 1024px          桌面 —— 完整侧边栏（图标+文字），维持原有默认布局
+     641px – 1024px     平板 —— 侧边栏收窄成"纯图标条"，常驻显示，无需额外操作
+     ≤ 640px            手机 —— 侧边栏收起为可滑出的抽屉，顶栏新增汉堡按钮开合
+   ============================================================================ */
+
+/* 顶栏汉堡菜单按钮：桌面/平板隐藏，只在手机宽度下出现 */
+.menu-toggle {
+  display: none;
+  align-items: center; justify-content: center;
+  width: 34px; height: 34px; border-radius: var(--radius-sm); flex-shrink: 0;
+  margin-right: 10px;
+  border: 1px solid var(--g-edge-soft);
+  background: var(--g-tint-clear);
+  -webkit-backdrop-filter: blur(var(--g-blur-clear)) saturate(var(--g-saturate));
+  backdrop-filter: blur(var(--g-blur-clear)) saturate(var(--g-saturate));
+  color: var(--text-secondary); cursor: pointer; font-family: inherit;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.menu-toggle:hover { background: var(--g-tint-clear-strong); color: var(--text-primary); }
+.menu-toggle svg { width: 18px; height: 18px; }
+
+/* 手机端侧边栏抽屉的遮罩层，桌面/平板下不渲染、不占位、不拦截点击 */
+.nav-backdrop { display: none; }
+
+/* 表格横向滚动容器：手机上列数较多的表格（饮食计划、库存）整体可以左右滑动，
+   而不是把每一列都挤扁到看不清——只包了一层容器，不改变表格本身的结构。 */
+.table-scroll { width: 100%; }
+
+@media (max-width: 1024px) {
+  /* 平板：侧边栏收窄，节省横向空间给内容区，点击行为完全不变。
+     注意：早期版本这里把文字名称整个隐藏、只剩图标，结果在触屏平板上
+     （没有鼠标悬浮这回事）完全没法分辨图标对应哪个模块——所以改成图标
+     上面配一行极小的文字标签（类似 iPad 系统 App 底部标签栏的样式），
+     名字一直都在，只是变小、挪到图标下面，不需要靠悬浮才能看到。 */
+  .sidebar { width: 86px; }
+  .app-brand { justify-content: center; padding: 0 0 18px 0; }
+  .app-brand-name { display: none; }
+  .nav-group-title { display: none; }
+  .nav-item {
+    flex-direction: column; justify-content: center; align-items: center;
+    margin: 0 8px; padding: 8px 2px 7px; gap: 4px; width: calc(100% - 16px);
+  }
+  .nav-item span:not(.nav-icon-tile) {
+    display: block; font-size: 10px; line-height: 1.15; text-align: center;
+    max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .sidebar-profile { flex-direction: column; padding: 10px 4px; gap: 4px; }
+  .sidebar-profile-name {
+    display: block; font-size: 10px; max-width: 100%;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+
+  .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .split-side { width: 220px; }
+  .topbar { padding: 14px 20px; }
+  .content-area { padding: 20px; }
+}
+
+@media (max-width: 640px) {
+  .menu-toggle { display: inline-flex; }
+
+  /* 手机：侧边栏变成从左侧滑出的抽屉，默认藏在屏幕外，通过 .nav-open 滑入，
+     动画曲线复用同一套弹簧曲线，滑出/收起的手感和分段控件的形变是同一种质感。 */
+  .sidebar {
+    position: fixed; top: 0; left: 0; bottom: 0; z-index: 60;
+    width: 240px; padding: 22px 0;
+    transform: translateX(-100%);
+    transition: transform 0.32s var(--spring-ease);
+    box-shadow: 4px 0 24px rgba(30, 36, 46, 0.18);
+  }
+  .app-shell.nav-open .sidebar { transform: translateX(0); }
+  .app-brand { justify-content: flex-start; padding: 0 20px 18px 20px; }
+  .app-brand-name { display: inline; }
+  .nav-group-title { display: block; }
+  /* 手机抽屉展开后是完整宽度的侧边栏，要把平板断点里改成"图标在上、
+     文字在下"的纵向排列（flex-direction/字号等）显式改回横向单行，
+     不然因为两个断点在手机宽度下同时生效，没被这里重新声明的属性
+     会一直沿用平板断点的样式，抽屉里的文字会一直保持那种小字号纵向布局。 */
+  .nav-item {
+    flex-direction: row; justify-content: flex-start; align-items: center;
+    margin: 0 8px; padding: 6px 14px; gap: 11px; width: calc(100% - 16px);
+  }
+  .nav-item span:not(.nav-icon-tile) {
+    display: inline; font-size: 13.5px; line-height: normal; text-align: left;
+    max-width: none; overflow: visible; text-overflow: clip; white-space: normal;
+  }
+  .sidebar-profile { flex-direction: row; justify-content: flex-start; padding: 10px 14px; }
+  .sidebar-profile-name {
+    display: inline; font-size: 12.5px; max-width: none;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+
+  .nav-backdrop {
+    display: block; position: fixed; inset: 0; z-index: 55;
+    background: rgba(20, 24, 30, 0.32);
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.28s ease;
+  }
+  .app-shell.nav-open .nav-backdrop { opacity: 1; pointer-events: auto; }
+
+  .topbar { padding: 12px 16px; }
+  .topbar-title { font-size: 16px; }
+  .content-area { padding: 14px; gap: 12px; }
+
+  /* 页面顶部的操作按钮行（比如个人记账的"上一月/下一月/账户管理/汇率设置/
+     管理分类/+记一笔"）在桌面端靠一个 .grow 占位元素把"翻页"和"管理类操作"
+     分成左右两组、始终在一行内。手机上宽度不够，本来会整体挤在一起自动换行，
+     看起来乱糟糟分不清主次。这里用一个经典 flex 技巧：让 .grow 自己占满
+     100% 宽度（但高度是 0、不可见），它就会强制把"它后面的按钮"换到下一行，
+     和"它前面的按钮"分成两组分别清爽地各自换行，而不是所有按钮混在一起乱跳行。 */
+  .section-row .grow { flex-basis: 100%; height: 0; }
+  .section-row { row-gap: 10px; }
+
+  .summary-grid { grid-template-columns: 1fr; }
+  /* 桌面端 .split-layout 用 align-items:flex-start 让两栏顶部对齐、各自按内容高度伸展；
+     堆叠成单列后同一个属性会变成"每一项按内容宽度收缩"，配合表格的 min-width 会把
+     整张卡片一起撑宽出屏幕——所以这里要显式改回 stretch，让每一项都占满这一列的宽度。 */
+  .split-layout { flex-direction: column; align-items: stretch; }
+  .split-side { width: 100%; }
+  .kanban-board { flex-direction: column; }
+  .settings-grid { grid-template-columns: 1fr; }
+  .toggle-grid { grid-template-columns: 1fr; }
+
+  .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  table.data-table { min-width: 560px; }
+
+  .modal-box { padding: 18px 16px; width: 92vw; }
+  .quick-memo-panel { right: 12px; left: 12px; width: auto; }
 }

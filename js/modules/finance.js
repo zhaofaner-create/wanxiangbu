@@ -13,6 +13,7 @@
   "use strict";
 
   const { h, mount, formatMoney } = require("../components/dom.js");
+  const { animateCount } = require("../components/odometer.js");
   const { createSegmented } = require("../components/segmented.js");
   const { openFormModal } = require("../components/modal.js");
   const { openConfirm } = require("../components/confirm.js");
@@ -227,11 +228,20 @@
     function renderBody() {
       const summary = financeMonthlySummary(store, currentMonth, currentAccountId);
 
+      // 收入/支出/结余这三个数字用"里程表"式的滚动计数动画展示（Odometer/Ticker），
+      // 每次金额变化都平滑滚动到新值，而不是生硬地瞬间跳变——先建好空的数字节点，
+      // mount 之后再各自播放一次滚动动画。
+      const incomeValueEl = h("div", { style: "font-size:20px;font-weight:700;" }, formatMoney(0));
+      const expenseValueEl = h("div", { style: "font-size:20px;font-weight:700;" }, formatMoney(0));
+      const balanceValueEl = h("div", { style: "font-size:20px;font-weight:700;" }, formatMoney(0));
       const summaryCards = h("div", { class: "summary-grid" }, [
-        h("div", { class: "card" }, [h("div", { class: "summary-card-title" }, "收入"), h("div", { style: "font-size:20px;font-weight:700;" }, formatMoney(summary.income))]),
-        h("div", { class: "card" }, [h("div", { class: "summary-card-title" }, "支出"), h("div", { style: "font-size:20px;font-weight:700;" }, formatMoney(summary.expense))]),
-        h("div", { class: "card" }, [h("div", { class: "summary-card-title" }, "结余"), h("div", { style: "font-size:20px;font-weight:700;" }, formatMoney(summary.balance))]),
+        h("div", { class: "card" }, [h("div", { class: "summary-card-title" }, "收入"), incomeValueEl]),
+        h("div", { class: "card" }, [h("div", { class: "summary-card-title" }, "支出"), expenseValueEl]),
+        h("div", { class: "card" }, [h("div", { class: "summary-card-title" }, "结余"), balanceValueEl]),
       ]);
+      animateCount(incomeValueEl, summary.income, { formatter: formatMoney });
+      animateCount(expenseValueEl, summary.expense, { formatter: formatMoney });
+      animateCount(balanceValueEl, summary.balance, { formatter: formatMoney });
 
       const breakdownCard = h("div", { class: "card" }, [
         h("div", { class: "card-title" }, "分类占比（支出）"),

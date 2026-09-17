@@ -148,7 +148,7 @@
     mount(container, h("div", { class: "split-layout" }, [
       h("div", { class: "split-main" }, [
         h("div", { class: "section-row" }, [h("div", { class: "grow" }), h("button", { class: "btn btn-primary", type: "button", onClick: openAddModal }, "+ 添加物品")]),
-        table,
+        h("div", { class: "table-scroll" }, table),
       ]),
       h("div", { class: "split-side", style: "display:flex;flex-direction:column;gap:14px;" }, [shoppingList, consumptionTrend]),
     ]));
