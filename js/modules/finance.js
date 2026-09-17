@@ -17,6 +17,7 @@
   const { createSegmented } = require("../components/segmented.js");
   const { openFormModal } = require("../components/modal.js");
   const { openConfirm } = require("../components/confirm.js");
+  const { renderLineChartSvg } = require("../components/lineChart.js");
   const { financeMonthlySummary } = require("../derived.js");
   const { todayStr, formatDateDisplay, shiftMonth } = require("../utils.js");
 
@@ -345,22 +346,19 @@
     ]));
   }
 
-  /** 手绘竖向双柱状图：最近6个月，每个月并排两根柱子（收入/支出）。 */
+  /** 折线图：最近6个月收入/支出两条趋势线（同一把最大值尺子，方便直接比较）。 */
   function renderIncomeExpenseChart(store, currentMonth) {
     const months = 6;
     const series = store.listMonthlyTotals(months, currentMonth);
-    const maxAmount = Math.max(1, ...series.flatMap((m) => [m.income, m.expense]));
-    const cols = series.map((m) => {
-      const incomeHeight = m.income > 0 ? Math.max(4, Math.round((m.income / maxAmount) * 100)) : 0;
-      const expenseHeight = m.expense > 0 ? Math.max(4, Math.round((m.expense / maxAmount) * 100)) : 0;
-      return h("div", { class: "chart-bar-col" }, [
-        h("div", { class: "chart-bar-track", style: "display:flex;gap:3px;align-items:flex-end;" }, [
-          h("div", { class: "chart-bar income", style: `height:${incomeHeight}%;flex:1;` }),
-          h("div", { class: "chart-bar expense", style: `height:${expenseHeight}%;flex:1;` }),
-        ]),
-        h("div", { class: "chart-bar-label" + (m.month === currentMonth ? " is-today" : "") }, monthLabel(m.month).replace("年", "/").replace("月", "")),
-      ]);
-    });
+
+    const svg = renderLineChartSvg([
+      { values: series.map((m) => m.income), color: "hsl(150, 55%, 42%)", formatValue: (v) => formatMoney(v), showValues: false },
+      { values: series.map((m) => m.expense), color: "hsl(6, 70%, 58%)", formatValue: (v) => formatMoney(v), showValues: false },
+    ]);
+
+    const labels = series.map((m) =>
+      h("div", { class: "chart-bar-label" + (m.month === currentMonth ? " is-today" : "") }, monthLabel(m.month).replace("年", "/").replace("月", ""))
+    );
 
     return h("div", { class: "card" }, [
       h("div", { class: "card-title" }, [
@@ -370,7 +368,10 @@
           h("span", { class: "chart-legend-dot expense" }), "支出",
         ]),
       ]),
-      h("div", { class: "chart-bars" }, cols),
+      h("div", { class: "line-chart-wrap" }, [
+        h("div", { html: svg }),
+        h("div", { class: "line-chart-labels" }, labels),
+      ]),
     ]);
   }
 

@@ -285,8 +285,9 @@ describe("学习任务：学习时长可视化统计图表（开发计划第一�
     await assert.doesNotReject(chartCard.waitFor());
     // 还没开始计时之前，应该提示还没有数据
     assert.match(await chartCard.innerText(), /开始给学习目标计时后/);
-    const barsBefore = await chartCard.locator(".chart-bar-col").count();
-    assert.equal(barsBefore, 7, "应该固定展示最近7天，一天一根柱子");
+    const labelsBefore = await chartCard.locator(".line-chart-labels > div").count();
+    assert.equal(labelsBefore, 7, "应该固定展示最近7天，一天一个点");
+    assert.equal(await chartCard.locator(".line-chart-svg").count(), 1, "应该是折线图而不是柱状图");
 
     const goalBlock = page.locator(".list-row-block", { hasText: "背单词" });
     await goalBlock.locator("button", { hasText: "开始计时" }).click();
@@ -295,7 +296,7 @@ describe("学习任务：学习时长可视化统计图表（开发计划第一�
 
     const afterText = await chartCard.innerText();
     assert.doesNotMatch(afterText, /开始给学习目标计时后/, "计时之后提示语应该消失");
-    assert.match(afterText, /\d+分|0分/, "今天这根柱子上方应该显示分钟数（哪怕不到1分钟显示0分）");
+    assert.match(afterText, /\d+分|0分/, "今天这个点旁边应该显示分钟数（哪怕不到1分钟显示0分）");
   });
 });
 
@@ -576,7 +577,8 @@ describe("个人记账：预算超支提醒 + 收支图表 + 多账户（开发�
 
     const chartCard = page.locator(".card", { hasText: "收支图表" });
     await assert.doesNotReject(chartCard.waitFor());
-    assert.equal(await chartCard.locator(".chart-bar-col").count(), 6); // 最近6个月
+    assert.equal(await chartCard.locator(".line-chart-labels > div").count(), 6); // 最近6个月
+    assert.equal(await chartCard.locator(".line-chart-svg polyline").count(), 2, "收入/支出两条线");
   });
 
   test("新增账户后可以在切换器里筛选，记账时能指定账户，删除账户不影响记账记录", async () => {
