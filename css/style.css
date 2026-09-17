@@ -224,12 +224,12 @@ body::after {
 /* 软件的品牌标识：一个小小的液态玻璃图标 tile + 名字，代替原来纯文字的"凡尔的APP"。 */
 .app-brand { display: flex; align-items: center; gap: 10px; padding: 0 20px 18px 20px; flex-shrink: 0; }
 .app-brand-icon {
-  width: 30px; height: 30px; border-radius: 9px; flex-shrink: 0;
+  width: 42px; height: 42px; border-radius: 12px; flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
   background: linear-gradient(160deg, #f4ede2, #e7dcc8);
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.55), 0 3px 9px rgba(30, 40, 55, 0.2);
 }
-.app-brand-icon svg { width: 23px; height: 23px; }
+.app-brand-icon svg { width: 33px; height: 33px; }
 .app-brand-name { font-size: 16px; font-weight: 700; letter-spacing: -0.01em; color: var(--text-primary); }
 /* nav-list 占满中间剩余空间、自己单独滚动，这样不管模块多少，底部的个人信息条永远贴底。 */
 .nav-list { display: flex; flex-direction: column; gap: 18px; flex: 1; overflow-y: auto; padding-bottom: 8px; }
