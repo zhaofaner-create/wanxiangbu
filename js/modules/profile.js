@@ -13,7 +13,7 @@
   "use strict";
 
   const { h, mount } = require("../components/dom.js");
-  const { computeCoverCropRect } = require("../components/imageCrop.js");
+  const { openAvatarCropper } = require("../components/avatarCropper.js");
 
   const meta = { id: "profile", label: "个人信息", title: "个人信息", subtitle: "你的昵称和头像，只保存在这台设备本地" };
 
@@ -67,7 +67,7 @@
       rerender();
     }
 
-    /** 选好照片文件后：读成图片 → 居中裁成正方形 → 缩小到 200×200 → 编码成 JPEG data URL 存起来。 */
+    /** 选好照片文件后：读成 data URL → 打开裁剪弹窗让用户自己拖动/缩放选取范围 → 确认后存下来。 */
     function handleFileSelected(file) {
       if (!file) return;
       if (!file.type || file.type.indexOf("image/") !== 0) {
@@ -78,19 +78,13 @@
       const reader = new FileReader();
       reader.onerror = () => { uploadError = "图片读取失败，换一张试试"; rerender(); };
       reader.onload = () => {
-        const img = new Image();
-        img.onerror = () => { uploadError = "图片解析失败，换一张试试"; rerender(); };
-        img.onload = () => {
-          const { sx, sy, size } = computeCoverCropRect(img.naturalWidth, img.naturalHeight);
-          const canvas = document.createElement("canvas");
-          canvas.width = AVATAR_IMAGE_SIZE;
-          canvas.height = AVATAR_IMAGE_SIZE;
-          const cx = canvas.getContext("2d");
-          cx.drawImage(img, sx, sy, size, size, 0, 0, AVATAR_IMAGE_SIZE, AVATAR_IMAGE_SIZE);
-          uploadError = "";
-          saveAvatarImage(canvas.toDataURL("image/jpeg", AVATAR_IMAGE_QUALITY));
-        };
-        img.src = reader.result;
+        uploadError = "";
+        openAvatarCropper({
+          imageSrc: reader.result,
+          outputSize: AVATAR_IMAGE_SIZE,
+          quality: AVATAR_IMAGE_QUALITY,
+          onConfirm: (dataUrl) => saveAvatarImage(dataUrl),
+        });
       };
       reader.readAsDataURL(file);
     }

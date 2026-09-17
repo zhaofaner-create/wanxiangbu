@@ -31,5 +31,54 @@
     return { sx, sy, size };
   }
 
-  return { computeCoverCropRect };
+  // 头像上传现在改成"用户手动选取截取区域"（拖动+缩放），不再自动居中裁剪，
+  // computeCoverCropRect 保留作为纯数学工具函数（依然有单测覆盖），但下面这两个
+  // 函数才是交互式裁剪弹窗（avatarCropper.js）实际用到的几何计算。
+
+  const MIN_ZOOM = 1;
+
+  /**
+   * 计算图片在正方形取景框里的显示状态。zoom=1 时图片按"覆盖"取景框的最小比例
+   * 显示（刚好铺满、不留空白，跟以前自动居中裁剪的画面一致），zoom 越大图片显示
+   * 得越大（放大细节）。offsetX/offsetY 是用户拖动产生的偏移量（取景框像素为
+   * 单位），会被夹在"取景框边缘不能超出图片范围"的区间内，保证任何时候取景框里
+   * 都是图片内容、不会露出空白。纯数学，不碰 Canvas/Image，方便单测。
+   */
+  function computeCropGeometry(naturalWidth, naturalHeight, viewSize, zoom, offsetX, offsetY) {
+    const iw = Number(naturalWidth) || 0;
+    const ih = Number(naturalHeight) || 0;
+    const view = Number(viewSize) || 0;
+    const z = Math.max(MIN_ZOOM, Number(zoom) || MIN_ZOOM);
+    if (iw <= 0 || ih <= 0 || view <= 0) {
+      return { scale: 0, displayWidth: 0, displayHeight: 0, maxOffsetX: 0, maxOffsetY: 0, offsetX: 0, offsetY: 0 };
+    }
+    const baseScale = view / Math.min(iw, ih);
+    const scale = baseScale * z;
+    const displayWidth = iw * scale;
+    const displayHeight = ih * scale;
+    const maxOffsetX = Math.max(0, (displayWidth - view) / 2);
+    const maxOffsetY = Math.max(0, (displayHeight - view) / 2);
+    const clampedX = Math.min(maxOffsetX, Math.max(-maxOffsetX, Number(offsetX) || 0));
+    const clampedY = Math.min(maxOffsetY, Math.max(-maxOffsetY, Number(offsetY) || 0));
+    return { scale, displayWidth, displayHeight, maxOffsetX, maxOffsetY, offsetX: clampedX, offsetY: clampedY };
+  }
+
+  /**
+   * 在上面几何计算基础上，反推出"最终应该从原图哪个正方形区域截取"（左上角
+   * sx/sy + 边长 size，单位是原图像素），交给 canvas.drawImage 去真正裁剪压缩。
+   */
+  function computeCropSourceRect(naturalWidth, naturalHeight, viewSize, zoom, offsetX, offsetY) {
+    const view = Number(viewSize) || 0;
+    const geo = computeCropGeometry(naturalWidth, naturalHeight, view, zoom, offsetX, offsetY);
+    if (!geo.scale) return { sx: 0, sy: 0, size: 0 };
+    const imageLeft = (view - geo.displayWidth) / 2 + geo.offsetX;
+    const imageTop = (view - geo.displayHeight) / 2 + geo.offsetY;
+    return {
+      sx: -imageLeft / geo.scale,
+      sy: -imageTop / geo.scale,
+      size: view / geo.scale,
+    };
+  }
+
+  return { computeCoverCropRect, computeCropGeometry, computeCropSourceRect, MIN_ZOOM };
 });

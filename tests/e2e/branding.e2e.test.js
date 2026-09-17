@@ -89,6 +89,10 @@ describe("个人信息：上传相册照片当头像", () => {
       buffer: Buffer.from(TINY_PNG_BASE64, "base64"),
     });
 
+    // 选好文件后会先弹出截取弹窗（拖动/缩放选区域），确认裁剪之后才真正保存头像。
+    await page.waitForSelector(".avatar-crop-box", { timeout: 5000 });
+    await page.locator(".avatar-crop-box .btn-primary").click();
+
     // 压缩编码是异步的（FileReader + Image + canvas），轮询等大头像预览里出现 <img>
     await page.waitForSelector(".profile-avatar-large img", { timeout: 5000 });
     const largeSrc = await page.locator(".profile-avatar-large img").getAttribute("src");
@@ -111,6 +115,8 @@ describe("个人信息：上传相册照片当头像", () => {
       mimeType: "image/png",
       buffer: Buffer.from(TINY_PNG_BASE64, "base64"),
     });
+    await page.waitForSelector(".avatar-crop-box", { timeout: 5000 });
+    await page.locator(".avatar-crop-box .btn-primary").click();
     await page.waitForSelector(".profile-avatar-large img", { timeout: 5000 });
 
     await page.locator("button", { hasText: "移除照片，换回表情" }).click();

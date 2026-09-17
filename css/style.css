@@ -611,6 +611,32 @@ body::after {
 .modal-title { font-size: 15px; font-weight: 700; margin-bottom: 14px; }
 .confirm-message { font-size: 13px; color: var(--text-secondary); margin-bottom: 16px; line-height: 1.6; }
 
+/* 头像截取弹窗：一个固定尺寸的正方形取景框，图片在里面可以拖动、可以用滑块缩放，
+   四周露出来的部分（不在取景框里的）就是最终会被裁掉、不会存进头像里的部分。 */
+.avatar-crop-box { width: auto; }
+.avatar-crop-viewport {
+  position: relative;
+  width: 260px; height: 260px;
+  margin: 0 auto;
+  overflow: hidden;
+  border-radius: 50%;
+  background: var(--g-tint-thin, rgba(0,0,0,0.06));
+  border: 1px solid var(--g-edge-soft);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.avatar-crop-viewport:active { cursor: grabbing; }
+.avatar-crop-img {
+  position: absolute;
+  left: 0; top: 0;
+  max-width: none;
+  pointer-events: none;
+  -webkit-user-drag: none;
+}
+.avatar-crop-zoom-row { display: flex; align-items: center; gap: 10px; margin-top: 16px; }
+.avatar-crop-zoom { flex: 1; }
+
 /* 快速备忘 */
 .quick-memo-btn { position: relative; }
 .quick-memo-panel {
