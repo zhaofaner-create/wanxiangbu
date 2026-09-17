@@ -5,6 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>万象簿</title>
   <link rel="stylesheet" href="css/style.css" />
+  <!-- 下面这几行是给 PWA（安装到桌面/离线缓存）用的：直接双击本文件（file:// 打开）
+       完全不受影响——manifest/图标只是普通同源资源，浏览器会照常加载；真正需要
+       "安全上下文"（http(s) 或 localhost）的 Service Worker 注册脚本在下面 body
+       末尾有单独的 file:// 判断守卫，file:// 下会直接跳过、不注册、不报错。 -->
+  <link rel="manifest" href="manifest.json" />
+  <link rel="icon" href="icons/icon-32.png" type="image/png" />
+  <link rel="apple-touch-icon" href="icons/icon-180.png" />
+  <meta name="theme-color" content="#e7dcc8" />
 </head>
 <body>
   <div class="app-shell">
@@ -96,5 +104,14 @@
   <script src="js/modules/profile.js"></script>
   <script src="js/modules/settings.js"></script>
   <script src="js/main.js"></script>
+  <script>
+    // Service Worker 只在"安全上下文"（http(s) 或 localhost）下才允许注册，
+    // file:// 直接双击打开时这里会跳过，不影响、也不改变现有的离线使用方式。
+    if (typeof navigator !== "undefined" && "serviceWorker" in navigator && window.location.protocol !== "file:") {
+      window.addEventListener("load", function () {
+        navigator.serviceWorker.register("sw.js").catch(function () {});
+      });
+    }
+  </script>
 </body>
 </html>
