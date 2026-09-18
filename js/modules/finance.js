@@ -22,8 +22,17 @@
 
   const meta = { id: "finance", label: "个人记账", title: "个人记账", subtitle: "" };
 
-  const CURRENCY_LABELS = { CNY: "人民币 (CNY)", EUR: "欧元 (EUR)", USD: "美元 (USD)" };
-  const CURRENCY_SYMBOLS = { CNY: "¥", EUR: "€", USD: "$" };
+  const CURRENCY_LABELS = {
+    CNY: "人民币 (CNY)", EUR: "欧元 (EUR)", USD: "美元 (USD)",
+    JPY: "日元 (JPY)", GBP: "英镑 (GBP)", HKD: "港币 (HKD)",
+  };
+  const CURRENCY_SYMBOLS = { CNY: "¥", EUR: "€", USD: "$", JPY: "¥", GBP: "£", HKD: "HK$" };
+
+  // 免费、免注册、免密钥的实时汇率查询接口（Frankfurter，数据来自欧洲央行等官方来源）。
+  // 只有用户主动点"刷新实时汇率"这一下才会发起这一次网络请求，App 打开/记账/看统计这些
+  // 日常操作全程仍然不联网；查询失败（离线、服务暂时不可用）就静默保留手动填的汇率，
+  // 不会让记账功能跟着联网状态一起崩掉。
+  const EXCHANGE_RATE_API = "https://api.frankfurter.dev/v2/latest";
 
   /** 按币种格式化金额（不是人民币的话，记账列表里单独用这个，而不是只认 ¥ 的 formatMoney）。 */
   function formatByCurrency(amount, currency) {
@@ -170,11 +179,49 @@
           input,
         ]);
       });
+
+      const updatedAt = store.getExchangeRatesUpdatedAt();
+      const statusEl = h("div", { class: "muted exchange-rate-status", style: "font-size:12px;margin:2px 0 12px;" },
+        updatedAt ? `上次联网刷新：${new Date(updatedAt).toLocaleString("zh-CN")}` : "还没有联网刷新过，以下是手动填写/内置的参考汇率。");
+
+      async function refreshFromNetwork() {
+        refreshBtn.disabled = true;
+        statusEl.textContent = "正在联网查询最新汇率…";
+        try {
+          const url = `${EXCHANGE_RATE_API}?base=CNY&symbols=${foreign.join(",")}`;
+          const res = await fetch(url);
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          const data = await res.json();
+          // 接口返回的是"1人民币 = 多少外币"（比如 EUR: 0.128），我们存的是反过来的
+          // "1外币 = 多少人民币"，所以每个都要取倒数。
+          const inverted = {};
+          Object.keys(data.rates || {}).forEach((c) => {
+            const v = Number(data.rates[c]);
+            if (Number.isFinite(v) && v > 0) inverted[c] = 1 / v;
+          });
+          const result = store.setExchangeRates(inverted);
+          if (result.updated > 0) {
+            const fresh = store.getExchangeRates();
+            foreign.forEach((c) => { if (inputs[c]) inputs[c].value = String(fresh[c]); });
+            statusEl.textContent = `已更新 ${result.updated} 种货币的汇率（${new Date(store.getExchangeRatesUpdatedAt()).toLocaleString("zh-CN")}）`;
+          } else {
+            statusEl.textContent = "没有查询到可用的汇率数据，你可以手动填写。";
+          }
+        } catch (err) {
+          statusEl.textContent = "联网查询失败（可能没有网络），可以继续手动填写下面的汇率。";
+        } finally {
+          refreshBtn.disabled = false;
+        }
+      }
+      const refreshBtn = h("button", { class: "btn btn-outline btn-sm", type: "button", onClick: refreshFromNetwork }, "刷新实时汇率");
+
       const overlay = h("div", { class: "modal-overlay" }, [
         h("div", { class: "modal-box" }, [
           h("div", { class: "modal-title" }, "汇率设置"),
-          h("div", { class: "muted", style: "font-size:12px;margin-bottom:14px;" },
-            "这个应用不联网，没法自动取实时汇率，这里按你手动填的汇率换算。记账时会按当时的汇率把外币换算成人民币等值用于统计，改了汇率不会影响已经记过的账。"),
+          h("div", { class: "muted", style: "font-size:12px;margin-bottom:10px;" },
+            "记账时会按当时的汇率把外币换算成人民币等值用于统计，改了汇率不会影响已经记过的账。可以手动填，也可以点右边的按钮联网查一次最新汇率（这是你主动点了才会发生的一次性联网查询，不点就完全不联网）。"),
+          h("div", { class: "section-row", style: "margin-bottom:4px;" }, [refreshBtn]),
+          statusEl,
           ...rows,
           h("div", { class: "modal-actions" }, [
             h("button", { class: "btn btn-ghost", type: "button", onClick: () => overlay.remove() }, "取消"),

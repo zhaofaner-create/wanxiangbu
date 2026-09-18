@@ -41,13 +41,22 @@
     backup: '<path d="M7 17a4 4 0 0 1-1-7.9 5 5 0 0 1 9.6-1.7A4.5 4.5 0 0 1 17 17H7Z"/><path d="M12 11v6M9.5 14.5 12 17l2.5-2.5"/>',
     grid: '<rect x="4" y="4" width="7" height="7" rx="1.2"/><rect x="13" y="4" width="7" height="7" rx="1.2"/><rect x="4" y="13" width="7" height="7" rx="1.2"/><rect x="13" y="13" width="7" height="7" rx="1.2"/>',
     warn: '<path d="M12 4 3 20h18L12 4Z"/><path d="M12 10.5v4M12 17h.01"/>',
+    key: '<circle cx="8" cy="15" r="4"/><path d="M11 12 19 4M15 8l2.5 2.5M18 5l2.5 2.5"/>',
   };
   const ICON_COLORS = {
     save: ["hsl(206, 88%, 74%)", "hsl(206, 78%, 58%)"],
     backup: ["hsl(188, 70%, 66%)", "hsl(188, 60%, 50%)"],
     grid: ["hsl(248, 72%, 78%)", "hsl(248, 55%, 64%)"],
     warn: ["hsl(8, 88%, 74%)", "hsl(355, 70%, 62%)"],
+    key: ["hsl(150, 55%, 70%)", "hsl(150, 45%, 52%)"],
   };
+  // 生成备份文件名——不放在 render() 里面，是为了能被单元测试直接调用验证格式，
+  // 不用真的跑一遍浏览器点击下载才能确认文件名对不对。
+  function backupFilename(date) {
+    const ts = date.toISOString().slice(0, 19).replace(/[:T]/g, "-");
+    return `万象簿备份-${ts}.json`;
+  }
+
   function iconSvg(name) {
     return `<svg viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">${ICONS[name] || ""}</svg>`;
   }
@@ -67,18 +76,55 @@
     ctx.setTopbar(meta.title, meta.subtitle);
     function rerender() { render(container, store, ctx); }
 
-    function exportBackup() {
+    // 生成这一次备份要用的文件内容和文件名——导出下载和分享用的是同一份，
+    // 抽成一个函数避免两条路径的文件名格式不小心写岔了。
+    function buildBackupFile() {
       const json = store.exportBackup();
+      const filename = backupFilename(new Date());
       const blob = new Blob([json], { type: "application/json" });
+      return { blob, filename };
+    }
+
+    // 传统下载方式：生成一个隐藏的 <a download> 触发浏览器下载，落到"下载"文件夹。
+    // 在桌面浏览器上，或者手机浏览器不支持系统分享面板时，都退回用这条路。
+    function downloadBackupFile(blob, filename) {
       const url = URL.createObjectURL(blob);
-      const ts = new Date().toISOString().replace(/[:.]/g, "-");
       const a = document.createElement("a");
       a.href = url;
-      a.download = `faner-app-backup-${ts}.json`;
+      a.download = filename;
       document.body.appendChild(a);
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
+    }
+
+    // 导出备份：手机上优先调起系统自带的分享面板（微信/隔空投送/邮件……装了什么就能
+    // 分享到什么），不需要自己先找下载文件夹再手动传输；不支持分享文件的浏览器
+    // （目前主要是桌面浏览器）自动退回成传统下载，行为跟以前完全一样。
+    async function exportBackup() {
+      const { blob, filename } = buildBackupFile();
+      const canUseShareSheet =
+        typeof navigator !== "undefined" &&
+        typeof navigator.share === "function" &&
+        typeof File === "function";
+      if (canUseShareSheet) {
+        try {
+          const file = new File([blob], filename, { type: "application/json" });
+          const shareData = { files: [file], title: "万象簿备份" };
+          if (!navigator.canShare || navigator.canShare(shareData)) {
+            await navigator.share(shareData);
+            store.setLastBackupAt(new Date().toISOString());
+            rerender();
+            return;
+          }
+        } catch (err) {
+          // AbortError：用户自己在分享面板里点了取消，这不算失败，什么都不用做，
+          // 也不需要再退回下载（用户是主动放弃这次备份，不是分享功能坏了）。
+          if (err && err.name === "AbortError") return;
+          // 其它错误（比如某些浏览器"声称"支持分享文件，实际调用时才报错）才退回下载。
+        }
+      }
+      downloadBackupFile(blob, filename);
       store.setLastBackupAt(new Date().toISOString());
       rerender();
     }
@@ -125,11 +171,11 @@
 
     const backupCard = h("div", { class: "card" }, [
       cardHeading("backup", "数据备份"),
-      h("div", { class: "settings-card-desc" }, "导出成一个 JSON 文件存起来，换电脑或者不小心清空数据时可以用它恢复。"),
+      h("div", { class: "settings-card-desc" }, "导出成一个 JSON 文件存起来，换设备或者不小心清空数据时可以用它恢复；手机上会优先弹出系统分享面板，可以直接传给另一台设备。"),
       h("div", { class: "settings-status-line" + (settings.lastBackupAt ? "" : " unsaved") },
         settings.lastBackupAt ? `上次备份：${new Date(settings.lastBackupAt).toLocaleString("zh-CN")}` : "还没有备份过"),
       h("div", { class: "section-row" }, [
-        h("button", { class: "btn btn-outline", type: "button", onClick: exportBackup }, "导出备份"),
+        h("button", { class: "btn btn-outline", type: "button", onClick: exportBackup }, "导出/分享备份"),
         h("button", { class: "btn btn-outline", type: "button", onClick: () => fileInput.click() }, "导入恢复"),
         fileInput,
       ]),
@@ -175,6 +221,31 @@
       )),
     ]);
 
+    // 翻译服务密钥：先做好这个设置入口，为以后"课堂笔记多语言互译"功能准备；
+    // 密钥只存在这台设备本地（localStorage），不会写进代码、也不会上传到任何地方，
+    // 分享这份 App 给别人用，对方要用翻译功能就填自己申请的密钥，互不影响、互不花钱。
+    const apiKeyInput = h("input", {
+      class: "field-input",
+      type: "password",
+      autocomplete: "off",
+      placeholder: settings.translationApiKey ? "已设置，留空并保存可清除" : "粘贴你自己申请的翻译服务密钥",
+    });
+    function saveTranslationApiKey() {
+      store.setTranslationApiKey(apiKeyInput.value);
+      rerender();
+    }
+    const translationCard = h("div", { class: "card" }, [
+      cardHeading("key", "翻译服务密钥"),
+      h("div", { class: "settings-card-desc" },
+        "给以后课堂笔记的多语言互译功能用。密钥要你自己去翻译服务商那边申请，只存在这台设备本地，不会被公开或者传到别的地方；分享这个 App 给朋友，他要用翻译得填他自己的密钥。"),
+      h("div", { class: "settings-status-line" + (settings.translationApiKey ? "" : " unsaved") },
+        settings.translationApiKey ? "已设置密钥" : "还没有设置密钥"),
+      h("div", { class: "section-row" }, [
+        apiKeyInput,
+        h("button", { class: "btn btn-outline", type: "button", onClick: saveTranslationApiKey }, "保存"),
+      ]),
+    ]);
+
     const dangerCard = h("div", { class: "card danger-card" }, [
       cardHeading("warn", "危险操作", true),
       h("div", { class: "settings-card-desc" }, "清空后所有模块的数据都将被删除，且无法恢复（除非你之前导出过备份）。"),
@@ -201,11 +272,12 @@
           h("div", { class: "settings-section-label" }, "偏好设置"),
           appearanceCard,
           homeCardsCard,
+          translationCard,
         ]),
       ]),
       dangerCard,
     ]));
   }
 
-  return { meta, render };
+  return { meta, render, backupFilename };
 });

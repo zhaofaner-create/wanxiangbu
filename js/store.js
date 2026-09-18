@@ -51,9 +51,14 @@
       inventoryConsumptionLog: [],
       financeTransactions: [],
       financeCategories: ["餐饮", "交通", "日用", "娱乐", "其他"],
-      // 汇率表：1 单位该货币 = 多少人民币。应用本身不联网（"离线可用"是硬性要求），拿不到实时汇率，
-      // 所以内置一份大致参考值，用户可以在"个人记账"里自己修改成当前的真实汇率。
-      financeExchangeRates: { CNY: 1, EUR: 7.8, USD: 7.1 },
+      // 汇率表：1 单位该货币 = 多少人民币。这是离线兜底的默认参考值（应用核心功能仍然
+      // 不需要联网就能用）；用户可以在"个人记账"里手动改，也可以点"刷新实时汇率"联网
+      // 查询一次最新汇率——那是用户主动触发的一次性网络请求，不是自动/后台联网，跟其它
+      // 模块"打开就不联网"的承诺不冲突。查询失败（离线/没网）时，就继续用这份手动值，
+      // 记账功能完全不受影响。
+      financeExchangeRates: { CNY: 1, EUR: 7.8, USD: 7.1, JPY: 0.047, GBP: 9.1, HKD: 0.91 },
+      // 上一次成功联网刷新汇率的时间，null 表示还没刷新过（或者一直手动填）。
+      financeExchangeRatesUpdatedAt: null,
       // 每个分类的月度预算上限（人民币等值），没设置预算的分类不会出现在"预算超支提醒"里。
       // 多账户支持：每笔记账可以关联一个账户；老数据没有账户概念，init() 时会自动建一个
       // "默认账户"并把老记录都归到它名下，不会凭空丢失归属。以上两个都是后加字段，不进
@@ -83,6 +88,11 @@
         // 为 null 时表示"没有上传照片，用下面 avatar 这个 emoji"。两者都存着，
         // 上传照片只是优先显示，不会覆盖/丢失用户之前选的 emoji，方便随时切回去。
         profile: { name: "", avatar: "🙂", avatarImage: null },
+        // 翻译服务密钥：给以后"课堂笔记多语言互译"功能用的，用户自己去翻译服务商
+        // 那边申请、自己填在这里，只存在这台设备本地，绝不写进代码仓库、也不会
+        // 发去别的地方——每个人（包括分享这份App给的朋友）都用自己的密钥、自己那份
+        // 免费额度，不会互相占用、也不会算到别人账上。为空字符串表示还没配置。
+        translationApiKey: "",
       },
       // 读书笔记：一本书一条记录（书名/作者/状态/评分/起止日期），notes 是挂在某本书下面的
       // 一条条读书笔记/摘录（可选页码）。两个都是后加的顶层字段，不进 isValidDataShape 的 required。
@@ -155,6 +165,11 @@
         if (isValidDataShape(parsed)) {
           state = { ...defaultState(), ...parsed };
           state.settings = mergeSettingsDefaults(parsed.settings);
+          // 汇率表也要做跟 settings 一样的"深合并"：老存档如果只存了 CNY/EUR/USD 三种
+          // （在新增日元/英镑/港币之前存的档），直接整个覆盖会导致新币种完全没有汇率、
+          // convertToCNY 兜底成 1:1，记账金额会算错很多。用默认值把缺的币种补上，
+          // 老存档里已经手动改过的汇率（哪怕是 CNY/EUR/USD 这几个）保持不变。
+          state.financeExchangeRates = { ...defaultState().financeExchangeRates, ...(parsed.financeExchangeRates || {}) };
         } else {
           state = defaultState();
           persist();
@@ -852,11 +867,14 @@
     }
 
     // ---------- 个人记账 ----------
-    const CURRENCIES = ["CNY", "EUR", "USD"];
+    const CURRENCIES = ["CNY", "EUR", "USD", "JPY", "GBP", "HKD"];
 
     /** 汇率表（1 单位该货币 = 多少人民币），供界面展示和手动修改。 */
     function getExchangeRates() {
       return { ...state.financeExchangeRates };
+    }
+    function getExchangeRatesUpdatedAt() {
+      return state.financeExchangeRatesUpdatedAt;
     }
     /** 修改一种货币对人民币的汇率（不能改人民币自己的 1:1）。 */
     function setExchangeRate(currency, rate) {
@@ -866,6 +884,28 @@
       state.financeExchangeRates = { ...state.financeExchangeRates, [currency]: n };
       persist();
       return getExchangeRates();
+    }
+    /**
+     * 一次性批量写入多种货币的汇率（联网刷新回来的一整批结果用这个，比逐个调用
+     * setExchangeRate 只 persist 一次，效率更好），并记下这次刷新的时间。
+     * 非法/非正数的值会被跳过，不会把汇率表污染成 NaN 或负数；一个都没成功写入的话
+     * 不更新时间戳（避免"刷新失败但显示刷新成功"的误导）。
+     */
+    function setExchangeRates(ratesByCurrency) {
+      let changed = 0;
+      const next = { ...state.financeExchangeRates };
+      Object.keys(ratesByCurrency || {}).forEach((currency) => {
+        if (currency === "CNY" || !CURRENCIES.includes(currency)) return;
+        const n = Number(ratesByCurrency[currency]);
+        if (!Number.isFinite(n) || n <= 0) return;
+        next[currency] = n;
+        changed += 1;
+      });
+      if (changed === 0) return { updated: 0, rates: getExchangeRates() };
+      state.financeExchangeRates = next;
+      state.financeExchangeRatesUpdatedAt = new Date().toISOString();
+      persist();
+      return { updated: changed, rates: getExchangeRates() };
     }
     /** 按当前汇率表把一笔金额换算成人民币等值（用于汇总统计）。 */
     function convertToCNY(amount, currency) {
@@ -1217,6 +1257,11 @@
       setTheme(state.settings.theme === "day" ? "night" : "day");
       return state.settings.theme;
     }
+    /** 翻译服务密钥：纯本地存储，传什么存什么（去掉首尾空格），传空字符串等于清空。 */
+    function setTranslationApiKey(key) {
+      state.settings.translationApiKey = typeof key === "string" ? key.trim() : "";
+      persist();
+    }
     /** 更新个人资料（昵称/头像），patch 里只传要改的字段就行，另一个字段保持不变。 */
     function updateProfile(patch) {
       state.settings.profile = { ...state.settings.profile, ...patch };
@@ -1281,13 +1326,13 @@
       addTransaction, updateTransaction, removeTransaction, listTransactions, addCategory, removeCategory, listCategories,
       setBudget, removeBudget, getBudgets, getBudgetStatus, listMonthlyTotals,
       addAccount, updateAccount, removeAccount, listAccounts, getAccountBalance, listAccountsWithBalance,
-      getExchangeRates, setExchangeRate, CURRENCIES,
+      getExchangeRates, setExchangeRate, setExchangeRates, getExchangeRatesUpdatedAt, CURRENCIES,
       addGame, updateGame, removeGame, listGames, addPlaySession, listSessions, totalMinutesForGame,
       listGamePlaytimeSeries, listTopPlayedGames, findGame,
       addBook, updateBook, removeBook, listBooks, findBook,
       addBookNote, removeBookNote, listBookNotes, countBookNotes, listBooksFinishedSeries,
       getSettings, updateHomeCardVisibility, setLastBackupAt, manualSave,
-      setFontScale, setTheme, toggleTheme, updateProfile,
+      setFontScale, setTheme, toggleTheme, setTranslationApiKey, updateProfile,
       FONT_SCALES, THEMES, AVATAR_OPTIONS, BOOK_STATUSES,
       exportBackup, importBackup, resetAll,
     };

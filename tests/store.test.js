@@ -736,6 +736,50 @@ describe("个人记账：多币种 + 汇率换算", () => {
   test("编辑不存在的记录返回 null", () => {
     assert.equal(store.updateTransaction("no-such-id", { amount: 1 }), null);
   });
+
+  test("新增的几个常用币种（日元/英镑/港币）默认都有汇率、能正常记账换算", () => {
+    assert.deepEqual(store.CURRENCIES, ["CNY", "EUR", "USD", "JPY", "GBP", "HKD"]);
+    const rates = store.getExchangeRates();
+    ["JPY", "GBP", "HKD"].forEach((c) => assert.ok(rates[c] > 0, `${c} 应该有一个正的默认汇率`));
+    const t = store.addTransaction({ amount: 1000, currency: "JPY", type: "expense", category: "餐饮", date: "2026-09-16" });
+    assert.equal(t.amountCNY, Math.round(1000 * rates.JPY * 100) / 100);
+  });
+
+  test("setExchangeRates：批量写入多个币种的汇率，记下这次刷新时间", () => {
+    assert.equal(store.getExchangeRatesUpdatedAt(), null);
+    const result = store.setExchangeRates({ EUR: 7.9, USD: 7.2, JPY: 0.048 });
+    assert.equal(result.updated, 3);
+    assert.equal(store.getExchangeRates().EUR, 7.9);
+    assert.equal(store.getExchangeRates().USD, 7.2);
+    assert.equal(store.getExchangeRates().JPY, 0.048);
+    assert.ok(store.getExchangeRatesUpdatedAt(), "应该记下刷新时间");
+  });
+
+  test("setExchangeRates：忽略非法值（负数/非数字/CNY自己/不认识的币种），一个都没成功时不更新时间戳", () => {
+    const before = store.getExchangeRates();
+    const beforeUpdatedAt = store.getExchangeRatesUpdatedAt();
+    const result = store.setExchangeRates({ CNY: 2, EUR: -1, USD: "abc", XYZ: 5 });
+    assert.equal(result.updated, 0);
+    assert.deepEqual(store.getExchangeRates(), before);
+    assert.equal(store.getExchangeRatesUpdatedAt(), beforeUpdatedAt);
+  });
+
+  test("老存档（升级前）汇率表里只有 CNY/EUR/USD 三种，重新 init 应该自动补上新币种的默认汇率，同时保留老存档里已经手动改过的值", () => {
+    storage.setItem("faner-app-data", JSON.stringify({
+      schemaVersion: 1,
+      quickNotes: [], todayPlan: [], studyCourses: [], studyAssignments: [],
+      studyGoals: [], studyCheckins: [], studyDailyLogs: [], reminders: [],
+      mealPlanEntries: [], inventoryItems: [], shoppingListItems: [],
+      financeTransactions: [], financeCategories: ["餐饮"], games: [], gameSessions: [],
+      financeExchangeRates: { CNY: 1, EUR: 9.9, USD: 7.1 }, // 老存档：EUR 被用户手动改过
+      settings: { homeCards: {}, lastBackupAt: null, lastManualSaveAt: null },
+    }));
+    const s2 = createStore(storage);
+    s2.init();
+    const rates = s2.getExchangeRates();
+    assert.equal(rates.EUR, 9.9, "老存档里用户已经手动改过的汇率不能被默认值覆盖");
+    assert.ok(rates.JPY > 0 && rates.GBP > 0 && rates.HKD > 0, "老存档缺失的新币种要补上默认值，不能是 undefined");
+  });
 });
 
 describe("个人记账：预算超支提醒（开发计划第一版暂缓功能之一）", () => {
@@ -1032,6 +1076,14 @@ describe("设置：外观（字体字号 / 白天夜间主题）", () => {
     assert.equal(store.getSettings().theme, "day");
   });
 
+  test("setTranslationApiKey：默认为空字符串，设置后能读回来，去掉首尾空格，传空字符串等于清除", () => {
+    assert.equal(store.getSettings().translationApiKey, "");
+    store.setTranslationApiKey("  sk-test-12345  ");
+    assert.equal(store.getSettings().translationApiKey, "sk-test-12345");
+    store.setTranslationApiKey("");
+    assert.equal(store.getSettings().translationApiKey, "");
+  });
+
   test("老存档里 settings 没有 fontScale/theme/profile 字段时，重新 init 应该自动补上默认值（不能变成 undefined）", () => {
     storage.setItem("faner-app-data", JSON.stringify({
       schemaVersion: 1,
@@ -1047,6 +1099,7 @@ describe("设置：外观（字体字号 / 白天夜间主题）", () => {
     assert.equal(settings.fontScale, "medium", "老存档缺失的字段要补上默认值");
     assert.equal(settings.theme, "day");
     assert.deepEqual(settings.profile, { name: "", avatar: "🙂", avatarImage: null });
+    assert.equal(settings.translationApiKey, "", "老存档缺失的翻译密钥字段也要补上默认空字符串，不能是 undefined");
     assert.equal(settings.homeCards.study, false, "老存档里已有的字段要保留，不能被默认值覆盖");
   });
 });

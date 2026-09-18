@@ -527,6 +527,54 @@ describe("个人记账（PRD验收标准7）", () => {
     assert.deepEqual(networkViolations, []); // 全程没有为了"实时汇率"发起任何网络请求
   });
 
+  test("点'刷新实时汇率'：联网查询成功后自动填入汇率表，并记下刷新时间", async () => {
+    // 用 Playwright 拦截这一个域名的请求，返回一份固定的假数据——不需要（也不能）真的
+    // 打到 api.frankfurter.dev，测试跑在什么网络环境下都稳定、不依赖真实汇率数值。
+    await page.route("https://api.frankfurter.dev/**", (route) => {
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          amount: 1, base: "CNY", date: "2026-09-16",
+          rates: { EUR: 0.125, USD: 0.1389, JPY: 21.3, GBP: 0.1099, HKD: 1.082 },
+        }),
+      });
+    });
+
+    await goToModule(page, "个人记账");
+    await page.locator("button", { hasText: "汇率设置" }).click();
+    await assert.doesNotReject(page.locator(".modal-box", { hasText: "还没有联网刷新过" }).waitFor());
+
+    await page.locator("button", { hasText: "刷新实时汇率" }).click();
+    await assert.doesNotReject(page.locator(".exchange-rate-status", { hasText: /已更新 \d+ 种货币的汇率/ }).waitFor());
+
+    // 1 CNY = 0.125 EUR，反过来就是 1 EUR ≈ 8 CNY，欧元那一行的输入框应该被自动填成这个值。
+    const eurInput = page.locator(".modal-box").locator("input").first();
+    assert.equal(await eurInput.inputValue(), String(1 / 0.125));
+
+    await page.locator(".modal-box button", { hasText: "保存" }).click();
+    await assert.doesNotReject(page.locator(".modal-overlay").waitFor({ state: "detached" }));
+
+    // 重新打开弹窗，"上次联网刷新"的时间应该已经记下来了（不是每次打开都显示"还没有刷新过"）。
+    await page.locator("button", { hasText: "汇率设置" }).click();
+    await assert.doesNotReject(page.locator(".exchange-rate-status", { hasText: "上次联网刷新：" }).waitFor());
+  });
+
+  test("点'刷新实时汇率'：联网失败时给出提示，不影响手动填写", async () => {
+    await page.route("https://api.frankfurter.dev/**", (route) => route.abort("failed"));
+
+    await goToModule(page, "个人记账");
+    await page.locator("button", { hasText: "汇率设置" }).click();
+    await page.locator("button", { hasText: "刷新实时汇率" }).click();
+    await assert.doesNotReject(page.locator(".exchange-rate-status", { hasText: "联网查询失败" }).waitFor());
+
+    // 失败之后手动填写、保存依然要正常工作，不会被这次失败卡住。
+    const eurInput = page.locator(".modal-box").locator("input").first();
+    await eurInput.fill("9.99");
+    await page.locator(".modal-box button", { hasText: "保存" }).click();
+    await assert.doesNotReject(page.locator(".modal-overlay").waitFor({ state: "detached" }));
+  });
+
   test("编辑一笔记录：不用删除重新录入，改完金额和分类后流水和汇总都跟着更新", async () => {
     await goToModule(page, "个人记账");
     await page.locator("button", { hasText: "+ 记一笔" }).click();
@@ -687,18 +735,31 @@ describe("首页联动（PRD验收标准11）", () => {
 
 describe("首页：今日/本周/历史 计划切换视图", () => {
   test("三个标签分别只显示对应时间范围内的事项", async () => {
+    // 这个测试要摆弄"今天/本周内其它日子/30天前"三种日期的关系，写死具体某一天
+    // 的话，测试跑的那天一旦真的推移到了那个日期附近，"本周但不是今天"这种关系就
+    // 可能不成立了（之前就因为这个原因，日期一到 2026-09-18 就断言失败过一次）。
+    // 用 Playwright 的 Clock API 把浏览器里的"现在"锁定在一个固定的、提前算好
+    // 关系的星期三，页面里所有 new Date()/todayStr() 都会读到这个假时间，这样
+    // 测试的输入和真实世界今天是哪一天完全脱钩，不会再因为日期漂移而失败。
+    await page.clock.setFixedTime(new Date("2026-09-16T09:00:00")); // 固定为一个周三
+    await page.reload();
+    await page.waitForSelector(".nav-item");
+
     await goToModule(page, "今日计划");
 
     await page.locator("button", { hasText: "+ 添加今日事项" }).click();
     await fillModal(page, { text: "今天要交的周报" });
     await submitModal(page);
 
+    // 相对固定的"今天"（周三 2026-09-16）算：本周日（2026-09-20）落在本周范围内、
+    // 还没到，不会跟"历史（过去30天）"重叠；20天前（2026-08-27）落在过去30天窗口内，
+    // 且早于本周一（2026-09-14），两个范围互不重叠，断言才立得住。
     await page.locator("button", { hasText: "+ 添加今日事项" }).click();
-    await fillModal(page, { text: "本周晚些要做的事", date: "2026-09-18" });
+    await fillModal(page, { text: "本周晚些要做的事", date: "2026-09-20" });
     await submitModal(page);
 
     await page.locator("button", { hasText: "+ 添加今日事项" }).click();
-    await fillModal(page, { text: "上个月已经做过的事", date: "2026-08-20" });
+    await fillModal(page, { text: "上个月已经做过的事", date: "2026-08-27" });
     await submitModal(page);
 
     await goToModule(page, "首页总览");
@@ -814,7 +875,7 @@ describe("数据与设置：导出备份 / 导入恢复（PRD验收标准10）",
     await goToModule(page, "数据与设置");
     const [download] = await Promise.all([
       page.waitForEvent("download"),
-      page.locator("button", { hasText: "导出备份" }).click(),
+      page.locator("button", { hasText: "导出/分享备份" }).click(),
     ]);
     const backupPath = await download.path();
     assert.ok(backupPath);
@@ -836,6 +897,62 @@ describe("数据与设置：导出备份 / 导入恢复（PRD验收标准10）",
   });
 });
 
+describe("数据与设置：一键分享备份（Web Share API，手机上用来跳过手动传文件）", () => {
+  test("浏览器支持分享文件时，点导出会走系统分享面板而不是普通下载", async () => {
+    await goToModule(page, "数据与设置");
+    // 真机浏览器（尤其手机）才有 navigator.share，桌面无头浏览器默认没有，
+    // 这里手动打个桩模拟"支持分享"的情况，断言代码确实优先走了这条路径。
+    await page.evaluate(() => {
+      window.__shareCalls = [];
+      navigator.share = (data) => {
+        window.__shareCalls.push({ fileCount: data.files ? data.files.length : 0, title: data.title });
+        return Promise.resolve();
+      };
+      navigator.canShare = () => true;
+    });
+
+    let downloadFired = false;
+    page.once("download", () => { downloadFired = true; });
+    await page.locator("button", { hasText: "导出/分享备份" }).click();
+    await page.waitForFunction(() => window.__shareCalls && window.__shareCalls.length > 0);
+
+    const calls = await page.evaluate(() => window.__shareCalls);
+    assert.equal(calls.length, 1, "应该调用了一次 navigator.share");
+    assert.equal(calls[0].fileCount, 1, "分享的应该是1个备份文件");
+    assert.equal(downloadFired, false, "走分享面板时不应该再触发浏览器下载");
+    const backupCard = page.locator(".card", { hasText: "数据备份" });
+    assert.match(await backupCard.innerText(), /上次备份：/);
+  });
+
+  test("用户在系统分享面板里点取消（AbortError），不算失败，也不会退回下载", async () => {
+    await goToModule(page, "数据与设置");
+    await page.evaluate(() => {
+      navigator.share = () => Promise.reject(new DOMException("用户取消了分享", "AbortError"));
+      navigator.canShare = () => true;
+    });
+
+    let downloadFired = false;
+    page.once("download", () => { downloadFired = true; });
+    await page.locator("button", { hasText: "导出/分享备份" }).click();
+    await page.waitForTimeout(200); // 给异步的 catch 分支一点时间跑完
+    assert.equal(downloadFired, false, "用户主动取消分享，不应该自动退回下载");
+  });
+
+  test("navigator.share 存在但真正调用时报错（不是取消），会退回普通下载", async () => {
+    await goToModule(page, "数据与设置");
+    await page.evaluate(() => {
+      navigator.share = () => Promise.reject(new Error("某些浏览器声称支持、实际调用时才报错的情况"));
+      navigator.canShare = () => true;
+    });
+
+    const [download] = await Promise.all([
+      page.waitForEvent("download"),
+      page.locator("button", { hasText: "导出/分享备份" }).click(),
+    ]);
+    assert.ok(await download.path(), "调用报错（非取消）时应该退回普通下载，文件依然要能下到");
+  });
+});
+
 describe("数据与设置：手动保存", () => {
   test("平时自动保存之外，也提供一个手动保存按钮，点了会记下保存时间", async () => {
     await goToModule(page, "数据与设置");
@@ -853,6 +970,38 @@ describe("数据与设置：手动保存", () => {
     await goToModule(page, "数据与设置");
     assert.match(await page.locator(".card", { hasText: "手动保存" }).innerText(), /上次手动保存：/);
     assert.deepEqual(networkViolations, []);
+  });
+});
+
+describe("数据与设置：翻译服务密钥（为以后课堂笔记翻译功能准备的设置项）", () => {
+  test("填入密钥并保存，刷新后还在；清空并保存后恢复成未设置", async () => {
+    await goToModule(page, "数据与设置");
+    const keyCard = page.locator(".card", { hasText: "翻译服务密钥" });
+    await assert.doesNotReject(keyCard.waitFor());
+    assert.match(await keyCard.innerText(), /还没有设置密钥/);
+
+    await keyCard.locator("input").fill("sk-test-abc123");
+    await keyCard.locator("button", { hasText: "保存" }).click();
+    assert.match(await keyCard.innerText(), /已设置密钥/);
+
+    // 刷新后还在——是真的存进了 localStorage，不是只改了内存里的界面状态。
+    await page.reload();
+    await page.waitForSelector(".nav-item");
+    await goToModule(page, "数据与设置");
+    const keyCardAfterReload = page.locator(".card", { hasText: "翻译服务密钥" });
+    assert.match(await keyCardAfterReload.innerText(), /已设置密钥/);
+
+    // 清空输入框再保存，等于清除这个密钥。
+    await keyCardAfterReload.locator("input").fill("");
+    await keyCardAfterReload.locator("button", { hasText: "保存" }).click();
+    assert.match(await keyCardAfterReload.innerText(), /还没有设置密钥/);
+    assert.deepEqual(networkViolations, [], "填写/保存密钥全程不应该发出任何网络请求");
+  });
+
+  test("密钥输入框是 password 类型，不会在屏幕上明文显示", async () => {
+    await goToModule(page, "数据与设置");
+    const keyCard = page.locator(".card", { hasText: "翻译服务密钥" });
+    assert.equal(await keyCard.locator("input[type=password]").count(), 1);
   });
 });
 
