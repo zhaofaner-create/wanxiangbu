@@ -1332,11 +1332,30 @@
       return note;
     }
 
-    /** 保存某个目标语言的翻译结果（整段替换，不是追加——每次"生成翻译"都是全量重新翻译）。 */
+    /** 保存某个目标语言的翻译结果（整段替换，用户手动点"重新翻译全部"时用）。 */
     function setClassNoteTranslation(id, lang, segments) {
       const note = findClassNote(id);
       if (!note) return null;
       note.translations = { ...note.translations, [lang]: Array.isArray(segments) ? segments : [] };
+      touchClassNote(note);
+      persist();
+      return note;
+    }
+
+    /**
+     * 追加一批翻译结果到某个目标语言已有的翻译后面（不是整段替换）。
+     * 录音过程中的自动翻译每隔几秒只翻译"新增的那一小段转录"，如果还是用
+     * setClassNoteTranslation 整段替换，每次都要把已经翻译过的部分也重新传一遍、
+     * 重新存一遍，3小时的课录到后面转录越来越长，会越来越慢；用追加的话每次只处理
+     * 新增的一小段，跟录音时长无关，性能不会随时间变差。
+     */
+    function appendClassNoteTranslation(id, lang, segments) {
+      const note = findClassNote(id);
+      if (!note) return null;
+      const toAppend = Array.isArray(segments) ? segments : [];
+      if (toAppend.length === 0) return note;
+      const existing = note.translations[lang] || [];
+      note.translations = { ...note.translations, [lang]: [...existing, ...toAppend] };
       touchClassNote(note);
       persist();
       return note;
@@ -1504,7 +1523,7 @@
       addBook, updateBook, removeBook, listBooks, findBook,
       addBookNote, removeBookNote, listBookNotes, countBookNotes, listBooksFinishedSeries,
       addClassNote, findClassNote, appendClassNoteTranscript, finishClassNoteRecording,
-      setClassNoteTranslation, setClassNoteMarkdown, renameClassNote, removeClassNote, listClassNotes,
+      setClassNoteTranslation, appendClassNoteTranslation, setClassNoteMarkdown, renameClassNote, removeClassNote, listClassNotes,
       getSettings, updateHomeCardVisibility, setLastBackupAt, manualSave,
       setFontScale, setTheme, toggleTheme, updateProfile,
       setClaudeApiKey, setTranslationProvider,

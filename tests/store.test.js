@@ -1413,6 +1413,30 @@ describe("课堂笔记：录音+转录+翻译+AI整理笔记的数据层", () =>
     assert.equal(found.translations.zh[0].text, "大家好（重新翻译）");
   });
 
+  test("追加翻译结果：接在已有翻译后面，不是整段替换（录音过程中的自动翻译用这个）", () => {
+    const note = store.addClassNote({ title: "课3-追加" });
+    store.appendClassNoteTranslation(note.id, "zh", [{ start: 0, end: 3, text: "第一句" }]);
+    let found = store.findClassNote(note.id);
+    assert.equal(found.translations.zh.length, 1);
+
+    store.appendClassNoteTranslation(note.id, "zh", [{ start: 3, end: 6, text: "第二句" }, { start: 6, end: 9, text: "第三句" }]);
+    found = store.findClassNote(note.id);
+    assert.deepEqual(found.translations.zh.map((s) => s.text), ["第一句", "第二句", "第三句"]);
+
+    // 追加空数组：安全地什么都不做，不会往数组里塞进空内容，updatedAt 也不应该被打扰。
+    const beforeUpdatedAt = found.updatedAt;
+    store.appendClassNoteTranslation(note.id, "zh", []);
+    found = store.findClassNote(note.id);
+    assert.equal(found.translations.zh.length, 3);
+    assert.equal(found.updatedAt, beforeUpdatedAt);
+
+    // 另一种语言的翻译互不影响。
+    store.appendClassNoteTranslation(note.id, "en", [{ start: 0, end: 3, text: "hello" }]);
+    found = store.findClassNote(note.id);
+    assert.equal(found.translations.en.length, 1);
+    assert.equal(found.translations.zh.length, 3);
+  });
+
   test("保存 AI 整理出的笔记正文：状态变成 notes_ready", () => {
     const note = store.addClassNote({ title: "课4" });
     const updated = store.setClassNoteMarkdown(note.id, "# 课程结构\n- 三个模块");
@@ -1440,6 +1464,7 @@ describe("课堂笔记：录音+转录+翻译+AI整理笔记的数据层", () =>
     assert.equal(store.appendClassNoteTranscript("no-such-id", { text: "x" }), null);
     assert.equal(store.finishClassNoteRecording("no-such-id", {}), null);
     assert.equal(store.setClassNoteTranslation("no-such-id", "zh", []), null);
+    assert.equal(store.appendClassNoteTranslation("no-such-id", "zh", []), null);
     assert.equal(store.setClassNoteMarkdown("no-such-id", "x"), null);
     assert.equal(store.renameClassNote("no-such-id", "x"), null);
   });

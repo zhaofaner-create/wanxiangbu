@@ -48,6 +48,14 @@
   let recordStartError = null; // 启动失败（不支持/没权限）时的提示
   let liveError = null; // 录音过程中识别引擎报错的提示（不会强行中断录音）
   let watchdogTimer = null; // 录音页专用的"每秒刷新计时+离开页面自动收尾"定时器，同 todayPlan.js 的 tickTimer
+  // ---------- 录音过程中的自动翻译：不需要用户点按钮，每隔一段时间自动把"新增的那一小段
+  // 转录"发去翻译、追加到已有翻译后面。三小时的课如果每次都整段重新翻译会越来越慢，
+  // 所以只翻译"还没翻译过的尾部"（见下面 translateNewSegments）。 ----------
+  let liveTranslateLang = null; // 录音页"实时翻译"面板当前显示哪个目标语言（多个目标语言时可切换）
+  let autoTranslateBusy = false; // 上一次自动翻译请求是否还没返回，避免同时发出好几个重叠的请求
+  let autoTranslateErrors = {}; // 每个目标语言最近一次自动翻译失败的提示，成功一次就会清空
+  let lastAutoTranslateAt = 0; // 上一次自动翻译发生的时间戳（毫秒），配合下面的间隔做节流
+  const AUTO_TRANSLATE_INTERVAL_MS = 6000; // 每隔几秒批量翻译一次新增内容，不是每秒都联网
 
   function checkBrowserSupport() {
     const hasRecognition = typeof window !== "undefined" && Boolean(window.SpeechRecognition || window.webkitSpeechRecognition);
@@ -74,6 +82,59 @@
       azureRegion: settings.azureTranslatorRegion,
       deeplApiKey: settings.deeplApiKey,
     };
+  }
+
+  /**
+   * 只翻译"还没翻译过的那一段"（转录数组里超出已翻译长度的尾部），翻译完直接追加到
+   * 已有翻译后面，而不是每次都把从头到尾整段重新翻译一遍——这样不管是录音过程中的
+   * 自动翻译，还是详情页手动点"翻译"，花费都只取决于新增了多少内容，跟这堂课已经
+   * 录了多长时间无关（否则录到后面，每隔几秒重新翻译一次全部转录，会越来越慢）。
+   * 返回这次新翻译出来的那一小段（没有新内容则返回空数组）。
+   */
+  async function translateNewSegments(store, note, lang) {
+    const settings = store.getSettings();
+    const existing = note.translations[lang] || [];
+    const pending = note.transcriptSegments.slice(existing.length);
+    if (!pending.length) return [];
+    const translated = await translationProviders.translateSegments({
+      provider: settings.translationProvider,
+      segments: pending,
+      targetLangCode: lang,
+      keys: translationKeysFromSettings(settings),
+    });
+    store.appendClassNoteTranslation(note.id, lang, translated);
+    return translated;
+  }
+
+  /**
+   * 录音过程中的一次自动翻译：依次给每个目标语言追赶"还没翻译的新内容"。
+   * - 没配置当前翻译服务的密钥、或者所有目标语言都已经追上转录进度，直接跳过，不联网。
+   * - onSegments(lang, segments) 在某个语言翻译出新内容时调用，调用方用它直接往对应的
+   *   DOM 列表里追加几行，不需要（也不应该）整页重新渲染——理由同"实时转录"listEl。
+   * - onTick() 在开始、每处理完一个语言、以及全部结束时都会调用一次，方便调用方刷新
+   *   "翻译中…"这类状态文字。
+   */
+  async function runAutoTranslateTick(store, note, { onSegments, onTick } = {}) {
+    if (autoTranslateBusy) return;
+    const settings = store.getSettings();
+    const hasKey = translationProviders.isProviderConfigured(settings.translationProvider, translationKeysFromSettings(settings));
+    if (!hasKey) return;
+    const pendingLangs = note.targetLangs.filter((lang) => (note.translations[lang] || []).length < note.transcriptSegments.length);
+    if (!pendingLangs.length) return;
+    autoTranslateBusy = true;
+    if (onTick) onTick();
+    for (const lang of pendingLangs) {
+      try {
+        const translated = await translateNewSegments(store, note, lang);
+        autoTranslateErrors[lang] = null;
+        if (translated.length && onSegments) onSegments(lang, translated);
+      } catch (err) {
+        autoTranslateErrors[lang] = err.message || "翻译失败";
+      }
+      if (onTick) onTick();
+    }
+    autoTranslateBusy = false;
+    if (onTick) onTick();
   }
 
   function statusLabel(note) {
@@ -222,6 +283,12 @@
     recordStartError = null;
     liveError = null;
     recordingNoteId = note.id;
+    liveTranslateLang = note.targetLangs[0] || null;
+    autoTranslateBusy = false;
+    autoTranslateErrors = {};
+    // 从"现在"开始算第一个间隔，而不是从0开始（那样第一次 watchdog tick 就会立刻触发翻译）：
+    // 先攒一小段转录内容再翻译，跟用户要的"录一小段后统一翻译比较精准"是一回事。
+    lastAutoTranslateAt = Date.now();
     const langTag = SPEECH_LANG_TAGS[note.sourceLang] || "en-US";
 
     const instance = createSpeechRecorder({
@@ -278,6 +345,15 @@
       }
     }
     store.finishClassNoteRecording(note.id, { durationSeconds: result.durationSeconds, audioKey });
+    // 停止录音时，识别引擎可能还有几句"最终结果"是在 stop() 之后才通过 onTranscriptSegment
+    // 落到 note.transcriptSegments 里的；这里补翻译一次，追上最后这一小段。注意：故意不
+    // await 它——翻译服务可能很慢、也可能因为网络问题一直不返回，"结束录音"这个操作不应该
+    // 因为翻译卡住而迟迟不能跳转（用户可能已经赶时间去下一节课了）。翻译在后台完成后直接
+    // 写进 store，用户切到"翻译" tab 时会看到 store 里最新的内容；没赶上也可以在那里手动
+    // 点"翻译"补上，不影响别的功能。
+    if (note.targetLangs.length) {
+      runAutoTranslateTick(store, note, {}).catch(() => {});
+    }
     view = { mode: "detail", noteId: note.id };
     detailTab = "transcript";
     activeTranslationLang = note.targetLangs[0] || null;
@@ -307,6 +383,61 @@
     const captionEl = h("div", { class: "record-caption" }, "");
     const listEl = h("div", { class: "record-transcript-list" }, note.transcriptSegments.map(renderTranscriptRow));
     recordingRefs = { captionEl, listEl };
+
+    // ---------- 实时翻译面板：只有这条笔记选了互译语言才显示。多个目标语言时用胶囊
+    // 切换显示哪一个，切换本身只是隐藏/显示对应的列表，不重新翻译、也不重新渲染整页。 ----------
+    const hasTargetLangs = note.targetLangs.length > 0;
+    const settings = store.getSettings();
+    const hasTranslationKey = translationProviders.isProviderConfigured(settings.translationProvider, translationKeysFromSettings(settings));
+    const translationListEls = {};
+    const translationStatusEl = h("div", { class: "muted", style: "font-size:12px;margin-top:6px;" }, "");
+    let translationPanel = null;
+
+    function refreshTranslationStatus() {
+      if (autoTranslateBusy) {
+        translationStatusEl.textContent = "翻译中…";
+        return;
+      }
+      translationStatusEl.textContent = autoTranslateErrors[liveTranslateLang] || "";
+    }
+
+    if (hasTargetLangs) {
+      if (!liveTranslateLang || !note.targetLangs.includes(liveTranslateLang)) {
+        liveTranslateLang = note.targetLangs[0];
+      }
+      note.targetLangs.forEach((lang) => {
+        const langListEl = h("div", { class: "record-transcript-list" }, (note.translations[lang] || []).map(renderTranscriptRow));
+        langListEl.style.display = lang === liveTranslateLang ? "" : "none";
+        translationListEls[lang] = langListEl;
+      });
+      const langSwitcher = note.targetLangs.length > 1
+        ? createSegmented({
+            kind: "pill",
+            options: note.targetLangs.map((code) => ({ key: code, label: langLabel(store, code) })),
+            activeKey: liveTranslateLang,
+            onSelect: (key) => {
+              liveTranslateLang = key;
+              Object.entries(translationListEls).forEach(([lang, el]) => {
+                el.style.display = lang === key ? "" : "none";
+              });
+              refreshTranslationStatus();
+            },
+          })
+        : null;
+      refreshTranslationStatus();
+      translationPanel = h("div", { class: "card" }, [
+        h("div", { class: "card-title" }, "实时翻译"),
+        langSwitcher ? langSwitcher.el : null,
+        hasTranslationKey
+          ? null
+          : h(
+              "div", { class: "muted", style: "font-size:12px;margin-top:6px;" },
+              `还没配置当前使用的翻译服务（${providerLabel(store, settings.translationProvider)}），去「数据与设置」的「多语言互译服务」里填一个才能自动翻译；转录内容还是会照常实时显示。`
+            ),
+        translationStatusEl,
+        ...note.targetLangs.map((lang) => translationListEls[lang]),
+      ]);
+    }
 
     const pauseBtn = h(
       "button",
@@ -358,6 +489,7 @@
               h("div", { class: "section-row", style: "margin-top:12px;" }, [pauseBtn, stopBtn]),
             ]),
         h("div", { class: "card" }, [h("div", { class: "card-title" }, "实时转录"), listEl, captionEl]),
+        translationPanel,
       ])
     );
 
@@ -369,6 +501,22 @@
         return;
       }
       if (recorder) elapsedEl.textContent = aiClient.formatSeconds(recorder.elapsedSeconds());
+      // 自动翻译：每隔 AUTO_TRANSLATE_INTERVAL_MS 才检查一次，不是每秒都联网；只在
+      // "正在录音"（不是暂停/还没连上）时触发，暂停时新内容也不会增加，没什么可翻的。
+      if (hasTargetLangs && recorder && recorder.getState() === "recording") {
+        const now = Date.now();
+        if (now - lastAutoTranslateAt >= AUTO_TRANSLATE_INTERVAL_MS) {
+          lastAutoTranslateAt = now;
+          runAutoTranslateTick(store, note, {
+            onSegments: (lang, segments) => {
+              const el = translationListEls[lang];
+              if (!el) return;
+              segments.forEach((seg) => el.appendChild(renderTranscriptRow(seg)));
+            },
+            onTick: refreshTranslationStatus,
+          });
+        }
+      }
     }, 1000);
   }
 
@@ -464,17 +612,37 @@
 
       function buildBody() {
         const translated = note.translations[activeTranslationLang] || [];
+        const pendingCount = note.transcriptSegments.length - translated.length;
         const currentProvider = store.getSettings().translationProvider;
         const statusEl = h(
           "div", { class: "muted", style: "font-size:12px;margin:6px 0 10px;" },
           hasTranslationKey ? "" : `还没配置当前使用的翻译服务（${providerLabel(store, currentProvider)}），去「数据与设置」的「多语言互译服务」里填一个才能用这个功能`
         );
 
+        // 录音过程中已经自动翻译过一部分（见 renderRecordView 的自动翻译），这里的"翻译"
+        // 按钮只追赶还没翻译过的新内容，不会把已经翻译好的部分重新翻一遍多花一次请求；
+        // 如果想换一家服务商之后整段重新来一遍，用旁边的"全部重新翻译"。
         async function translateNow() {
           transBtn.disabled = true;
           const prevLabel = transBtn.textContent;
           transBtn.textContent = "翻译中…";
           statusEl.textContent = `${providerLabel(store, currentProvider)}正在翻译，可能需要几秒…`;
+          try {
+            await translateNewSegments(store, note, activeTranslationLang);
+            rerender();
+          } catch (err) {
+            transBtn.disabled = false;
+            transBtn.textContent = prevLabel;
+            statusEl.textContent = err.message || "翻译失败";
+          }
+        }
+
+        async function retranslateAll() {
+          redoBtn.disabled = true;
+          transBtn.disabled = true;
+          const prevLabel = redoBtn.textContent;
+          redoBtn.textContent = "翻译中…";
+          statusEl.textContent = `${providerLabel(store, currentProvider)}正在重新翻译全部内容，可能需要几秒…`;
           try {
             const settings = store.getSettings();
             const segments = await translationProviders.translateSegments({
@@ -486,8 +654,9 @@
             store.setClassNoteTranslation(note.id, activeTranslationLang, segments);
             rerender();
           } catch (err) {
-            transBtn.disabled = false;
-            transBtn.textContent = prevLabel;
+            redoBtn.disabled = false;
+            redoBtn.textContent = prevLabel;
+            transBtn.disabled = !hasTranslationKey || !note.transcriptSegments.length || undefined;
             statusEl.textContent = err.message || "翻译失败";
           }
         }
@@ -496,14 +665,25 @@
           "button",
           {
             class: "btn btn-outline", type: "button",
-            disabled: !hasTranslationKey || !note.transcriptSegments.length || undefined,
+            disabled: !hasTranslationKey || pendingCount <= 0 || undefined,
             onClick: translateNow,
           },
-          translated.length ? "重新翻译" : `翻译成${langLabel(store, activeTranslationLang)}`
+          !translated.length ? `翻译成${langLabel(store, activeTranslationLang)}` : pendingCount > 0 ? `翻译新增的${pendingCount}句` : "已翻译到最新"
         );
+        const redoBtn = translated.length
+          ? h(
+              "button",
+              {
+                class: "btn btn-ghost btn-sm", type: "button",
+                disabled: !hasTranslationKey || !note.transcriptSegments.length || undefined,
+                onClick: retranslateAll,
+              },
+              "全部重新翻译"
+            )
+          : null;
 
         return h("div", {}, [
-          h("div", { class: "section-row", style: "justify-content:flex-end;" }, [transBtn]),
+          h("div", { class: "section-row", style: "justify-content:flex-end;gap:8px;" }, [redoBtn, transBtn]),
           statusEl,
           translated.length
             ? h("div", { class: "card" }, translated.map(renderTranscriptRow))
