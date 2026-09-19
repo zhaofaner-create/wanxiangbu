@@ -76,6 +76,13 @@ const FAKE_BROWSER_APIS_SCRIPT = `
     const result = Object.assign([{ transcript: text }], { isFinal: isFinal !== false });
     rec.onresult({ resultIndex: 0, results: [result] });
   };
+
+  // 模拟识别引擎报错（比如连续多次 "no-speech"，代表根本没收到麦克风声音）。
+  window.__emitRecognitionError = (code) => {
+    const rec = window.__fakeRecognitions[window.__fakeRecognitions.length - 1];
+    if (!rec || !rec.onerror) return;
+    rec.onerror({ error: code });
+  };
 `;
 
 const UNSUPPORTED_BROWSER_SCRIPT = `
@@ -267,6 +274,31 @@ describe("课堂笔记：录音转文字", () => {
     await page.locator(".tabs .tab-btn", { hasText: "笔记" }).click();
     await assert.doesNotReject(page.locator(".content-area", { hasText: "还没设置 AI 服务密钥" }).first().waitFor());
     assert.equal(await page.locator("button", { hasText: "生成笔记" }).isDisabled(), true);
+  });
+});
+
+describe("课堂笔记：完全没收到声音时的提示（连续 no-speech）", () => {
+  test("连续两次 no-speech 会显示检查麦克风的提示，之后识别到真实语音会自动消失", async () => {
+    await startNewRecording(page, { title: "静音测试" });
+
+    await page.evaluate(() => window.__emitRecognitionError("no-speech"));
+    assert.doesNotMatch(await page.locator(".content-area").innerText(), /检查一下麦克风/);
+
+    await page.evaluate(() => window.__emitRecognitionError("no-speech"));
+    await assert.doesNotReject(page.locator(".content-area", { hasText: "检查一下麦克风" }).waitFor());
+
+    await page.evaluate(() => window.__emitTranscript("终于说话了", true));
+    await assert.doesNotReject(page.locator(".record-transcript-list", { hasText: "终于说话了" }).waitFor());
+    const text = await page.locator(".content-area").innerText();
+    assert.doesNotMatch(text, /检查一下麦克风/);
+  });
+
+  test("单次 no-speech（正常讲课停顿）不会触发提示", async () => {
+    await startNewRecording(page, { title: "偶尔停顿测试" });
+    await page.evaluate(() => window.__emitRecognitionError("no-speech"));
+    await page.evaluate(() => window.__emitTranscript("停顿之后继续说", true));
+    await assert.doesNotReject(page.locator(".record-transcript-list", { hasText: "停顿之后继续说" }).waitFor());
+    assert.doesNotMatch(await page.locator(".content-area").innerText(), /检查一下麦克风/);
   });
 });
 

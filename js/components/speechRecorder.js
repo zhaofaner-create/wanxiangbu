@@ -64,6 +64,12 @@
    *     isFinal=false 是"正在说、还可能改"的临时结果，isFinal=true 是确定下来的一段
    *   onStateChange(state): 状态变化时回调（STATES 里的值）
    *   onError(err): 出错时回调（err.kind 见上）
+   *   onSilence(streak): 连续第 streak 次收到"没检测到声音"（no-speech），streak 从 1
+   *     开始数；一旦识别引擎又收到真实的语音结果就会立刻回调一次 onSilence(0) 表示解除。
+   *     no-speech 本身很常见（讲课停顿几秒就可能触发一次），单次不代表有问题，所以这里
+   *     只负责报数，是否达到"提醒用户检查麦克风"的门槛交给调用方（classNotes 模块）判断——
+   *     这样能在"完全没收到声音"这种权限/设备问题上给用户一个可见提示，而不是像以前一样
+   *     整个课都在静默重试、界面上什么反馈都没有。
    *   SpeechRecognitionImpl / MediaRecorderImpl / getUserMediaImpl: 测试用的注入点，
    *     不传就用浏览器全局的真实实现
    */
@@ -73,6 +79,7 @@
       onTranscriptSegment = () => {},
       onStateChange = () => {},
       onError = () => {},
+      onSilence = () => {},
       SpeechRecognitionImpl = getGlobalSpeechRecognitionCtor(),
       MediaRecorderImpl = getGlobalMediaRecorderCtor(),
       getUserMediaImpl = getGlobalGetUserMedia(),
@@ -86,6 +93,7 @@
     let startedAt = 0;
     let pausedAccumMs = 0; // 暂停累计时长，用于给分段算出正确的相对秒数
     let pausedAt = 0;
+    let silenceStreak = 0; // 连续 no-speech 的次数，收到一次真实语音结果就清零
 
     function setState(next) {
       state = next;
@@ -104,12 +112,19 @@
 
     function attachRecognitionHandlers() {
       recognition.onresult = (event) => {
+        let hasText = false;
         for (let i = event.resultIndex; i < event.results.length; i += 1) {
           const result = event.results[i];
           const text = result[0] && result[0].transcript ? result[0].transcript.trim() : "";
           if (!text) continue;
+          hasText = true;
           const end = elapsedSeconds();
           onTranscriptSegment({ start: end, end, text, isFinal: Boolean(result.isFinal) });
+        }
+        // 真的识别到语音了，说明麦克风是通的，之前累计的"没收到声音"计数作废
+        if (hasText && silenceStreak !== 0) {
+          silenceStreak = 0;
+          onSilence(0);
         }
       };
       recognition.onerror = (event) => {
@@ -117,8 +132,11 @@
         if (code === "not-allowed" || code === "service-not-allowed") {
           onError(recorderError("没有获得麦克风权限，请在浏览器设置里允许后重试", "permission"));
         } else if (code === "no-speech") {
-          // 一段时间没检测到说话，不算致命错误，静默忽略，识别引擎通常会自动继续
-          return;
+          // 一段时间没检测到说话，不算致命错误，识别引擎通常会自动继续；但连续出现多次
+          // 说明可能根本没收到麦克风声音（权限/设备问题），报个数给调用方，让它自己决定
+          // 攒到多少次才提醒用户
+          silenceStreak += 1;
+          onSilence(silenceStreak);
         } else {
           onError(recorderError(`语音识别出错（${code || "未知错误"}）`, "recognition"));
         }
@@ -168,6 +186,7 @@
       startedAt = Date.now();
       pausedAccumMs = 0;
       pausedAt = 0;
+      silenceStreak = 0;
       setState(STATES.RECORDING);
     }
 

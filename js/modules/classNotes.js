@@ -47,6 +47,8 @@
   let recordingNoteId = null; // recorder 对应的笔记 id
   let recordStartError = null; // 启动失败（不支持/没权限）时的提示
   let liveError = null; // 录音过程中识别引擎报错的提示（不会强行中断录音）
+  let silenceHint = null; // 连续好几次都没检测到声音时的提示（很可能是麦克风权限/设备问题），一收到语音就消失
+  const SILENCE_HINT_STREAK = 2; // 连续几次 no-speech 才提示，避免正常讲课停顿被当成"没声音"
   let watchdogTimer = null; // 录音页专用的"每秒刷新计时+离开页面自动收尾"定时器，同 todayPlan.js 的 tickTimer
   // ---------- 录音过程中的自动翻译：不需要用户点按钮，每隔一段时间自动把"新增的那一小段
   // 转录"发去翻译、追加到已有翻译后面。三小时的课如果每次都整段重新翻译会越来越慢，
@@ -282,6 +284,7 @@
   function startRecordingSession(store, note, rerender) {
     recordStartError = null;
     liveError = null;
+    silenceHint = null;
     recordingNoteId = note.id;
     liveTranslateLang = note.targetLangs[0] || null;
     autoTranslateBusy = false;
@@ -306,6 +309,19 @@
       onStateChange: () => rerender(),
       onError: (err) => {
         liveError = err.message;
+        rerender();
+      },
+      onSilence: (streak) => {
+        if (streak === 0) {
+          if (!silenceHint) return; // 本来就没提示，不用白白触发一次重渲染
+          silenceHint = null;
+          rerender();
+          return;
+        }
+        if (streak < SILENCE_HINT_STREAK) return;
+        if (silenceHint) return; // 已经在提示了，避免每次 no-speech 都重渲染一次
+        silenceHint =
+          "已经有一段时间没检测到声音了：检查一下麦克风有没有被静音、Mac 的「系统设置→隐私与安全性→麦克风」里有没有给这个浏览器开权限，或者是不是有别的软件正占用麦克风；转录和录音还在继续，声音恢复后这条提示会自动消失。";
         rerender();
       },
     });
@@ -486,6 +502,9 @@
                 h("div", { style: "text-align:right;" }, [elapsedEl, stateLabelEl]),
               ]),
               liveError ? h("div", { style: "margin-top:8px;color:hsl(4,70%,55%);font-size:12px;" }, liveError) : null,
+              silenceHint
+                ? h("div", { style: "margin-top:8px;color:hsl(35,80%,45%);font-size:12px;" }, silenceHint)
+                : null,
               h("div", { class: "section-row", style: "margin-top:12px;" }, [pauseBtn, stopBtn]),
             ]),
         h("div", { class: "card" }, [h("div", { class: "card-title" }, "实时转录"), listEl, captionEl]),

@@ -69,7 +69,7 @@ beforeEach(() => {
 });
 
 function makeRecorder(overrides = {}) {
-  const events = { states: [], segments: [], errors: [] };
+  const events = { states: [], segments: [], errors: [], silence: [] };
   const recorder = createSpeechRecorder({
     lang: "fr-FR",
     SpeechRecognitionImpl: FakeRecognition,
@@ -78,6 +78,7 @@ function makeRecorder(overrides = {}) {
     onStateChange: (s) => events.states.push(s),
     onTranscriptSegment: (seg) => events.segments.push(seg),
     onError: (err) => events.errors.push(err),
+    onSilence: (streak) => events.silence.push(streak),
     ...overrides,
   });
   return { recorder, events };
@@ -220,6 +221,38 @@ describe("识别出错处理", () => {
     await recorder.start();
     FakeRecognition.instances[0].onerror({ error: "no-speech" });
     assert.equal(events.errors.length, 0);
+  });
+
+  test("no-speech 连续出现会通过 onSilence 报数，方便调用方判断是不是完全没收到声音", async () => {
+    const { recorder, events } = makeRecorder();
+    await recorder.start();
+    FakeRecognition.instances[0].onerror({ error: "no-speech" });
+    FakeRecognition.instances[0].onerror({ error: "no-speech" });
+    FakeRecognition.instances[0].onerror({ error: "no-speech" });
+    assert.deepEqual(events.silence, [1, 2, 3]);
+  });
+
+  test("再次识别到真实语音后，onSilence(0) 表示之前的静音计数解除", async () => {
+    const { recorder, events } = makeRecorder();
+    await recorder.start();
+    FakeRecognition.instances[0].onerror({ error: "no-speech" });
+    FakeRecognition.instances[0].onerror({ error: "no-speech" });
+    FakeRecognition.instances[0].onresult({
+      resultIndex: 0,
+      results: [makeResult("终于说话了", true)],
+    });
+    assert.deepEqual(events.silence, [1, 2, 0]);
+  });
+
+  test("识别到空文本不会误判成\"说话了\"，不会清零静音计数", async () => {
+    const { recorder, events } = makeRecorder();
+    await recorder.start();
+    FakeRecognition.instances[0].onerror({ error: "no-speech" });
+    FakeRecognition.instances[0].onresult({
+      resultIndex: 0,
+      results: [makeResult("   ", true)],
+    });
+    assert.deepEqual(events.silence, [1]);
   });
 
   test("其它错误码映射为 recognition 错误", async () => {
