@@ -98,6 +98,12 @@
       // 一条条读书笔记/摘录（可选页码）。两个都是后加的顶层字段，不进 isValidDataShape 的 required。
       books: [],
       bookNotes: [],
+      // 课堂笔记：录音+实时转录+多语言互译+AI整理笔记。这是本轮新加的模块，也是后加的
+      // 顶层字段，不进 isValidDataShape 的 required（同样的兼容性硬规则）。
+      // 注意：这里只存文字数据（转录文本/翻译文本/整理后的笔记），录音音频本身体积大，
+      // 不适合塞进 localStorage 的 JSON 里，音频用 IndexedDB 单独存（见
+      // js/components/speechRecorder.js），这里的每条笔记只存一个 audioKey 引用它。
+      classNotes: [],
     };
   }
 
@@ -106,6 +112,20 @@
   const AVATAR_OPTIONS = ["🙂", "😺", "🐶", "🦊", "🐼", "🐧", "🦉", "🐢", "🐨", "🌊", "🌿", "⭐"];
   const APP_NAME = "万象簿";
   const BOOK_STATUSES = ["想读", "在读", "读完"];
+  // 课堂笔记支持的语言（讲课语言/翻译目标语言公用同一份列表，一个语言可以既是
+  // 讲课语言也是翻译目标——比如老师讲法语、翻译成中文和英文两份）。
+  const CLASS_NOTE_LANGUAGES = [
+    { code: "zh", label: "中文" },
+    { code: "en", label: "英语" },
+    { code: "fr", label: "法语" },
+    { code: "es", label: "西班牙语" },
+    { code: "de", label: "德语" },
+    { code: "ja", label: "日语" },
+    { code: "ko", label: "韩语" },
+    { code: "ru", label: "俄语" },
+    { code: "pt", label: "葡萄牙语" },
+    { code: "it", label: "意大利语" },
+  ];
 
   /**
    * 把老存档里的 settings 和 defaultState() 里新增的 settings 子字段做一次"深合并"。
@@ -1225,6 +1245,111 @@
       return buckets;
     }
 
+    // ---------- 课堂笔记 ----------
+    /** 新建一条课堂笔记（录音开始时调用）。sourceLang 是讲课语言，targetLangs 是要互译成的语言列表。 */
+    function addClassNote({ title, sourceLang = "fr", targetLangs = [] } = {}) {
+      const note = {
+        id: uuid(),
+        title: title || "",
+        sourceLang,
+        targetLangs: Array.isArray(targetLangs) ? targetLangs.filter((l) => l !== sourceLang) : [],
+        // 转录分段：[{ start, end, text }]，start/end 是相对录音开始的秒数。
+        transcriptSegments: [],
+        // 翻译结果按目标语言代码分开存：{ en: [{start,end,text}], zh: [...] }。
+        // 没有生成过翻译的语言不会出现在这个对象里。
+        translations: {},
+        // AI 整理出的结构化笔记（Markdown 文本），没生成过是空字符串。
+        notesMarkdown: "",
+        // 录音时长（秒）和音频在 IndexedDB 里的引用 key；没有录完/还没存音频时为 null。
+        audioDurationSeconds: 0,
+        audioKey: null,
+        status: "recording", // recording | recorded | notes_ready
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      state.classNotes.push(note);
+      persist();
+      return note;
+    }
+
+    function findClassNote(id) {
+      return state.classNotes.find((n) => n.id === id) || null;
+    }
+
+    function touchClassNote(note) {
+      note.updatedAt = new Date().toISOString();
+    }
+
+    /** 追加一段转录文字（实时转录过程中，每出一个"最终结果"就调用一次）。 */
+    function appendClassNoteTranscript(id, segment) {
+      const note = findClassNote(id);
+      if (!note) return null;
+      const text = (segment && segment.text || "").trim();
+      if (!text) return note;
+      note.transcriptSegments.push({
+        start: Number(segment.start) || 0,
+        end: Number(segment.end) || 0,
+        text,
+      });
+      touchClassNote(note);
+      persist();
+      return note;
+    }
+
+    /** 录音结束：标记状态、记录总时长和音频引用。 */
+    function finishClassNoteRecording(id, { durationSeconds = 0, audioKey = null } = {}) {
+      const note = findClassNote(id);
+      if (!note) return null;
+      note.status = "recorded";
+      note.audioDurationSeconds = Number(durationSeconds) || 0;
+      note.audioKey = audioKey;
+      touchClassNote(note);
+      persist();
+      return note;
+    }
+
+    /** 保存某个目标语言的翻译结果（整段替换，不是追加——每次"生成翻译"都是全量重新翻译）。 */
+    function setClassNoteTranslation(id, lang, segments) {
+      const note = findClassNote(id);
+      if (!note) return null;
+      note.translations = { ...note.translations, [lang]: Array.isArray(segments) ? segments : [] };
+      touchClassNote(note);
+      persist();
+      return note;
+    }
+
+    /** 保存 AI 整理出的结构化笔记正文。 */
+    function setClassNoteMarkdown(id, markdown) {
+      const note = findClassNote(id);
+      if (!note) return null;
+      note.notesMarkdown = typeof markdown === "string" ? markdown : "";
+      note.status = "notes_ready";
+      touchClassNote(note);
+      persist();
+      return note;
+    }
+
+    function renameClassNote(id, title) {
+      const note = findClassNote(id);
+      if (!note) return null;
+      note.title = title || "";
+      touchClassNote(note);
+      persist();
+      return note;
+    }
+
+    function removeClassNote(id) {
+      state.classNotes = state.classNotes.filter((n) => n.id !== id);
+      persist();
+    }
+
+    /** 最新的在前面。用数组插入顺序倒转而不是按 createdAt 时间戳排序——两条笔记如果
+     * 在同一毫秒内连续创建（比如自动化测试里），时间戳会完全相同，排序结果就不可靠了；
+     * 数组本身的插入顺序才是绝对可靠的先后关系（同样的写法见 listBookNotes）。 */
+    function listClassNotes() {
+      return [...state.classNotes].reverse();
+    }
+
     // ---------- 设置 ----------
     function getSettings() {
       return {
@@ -1331,9 +1456,11 @@
       listGamePlaytimeSeries, listTopPlayedGames, findGame,
       addBook, updateBook, removeBook, listBooks, findBook,
       addBookNote, removeBookNote, listBookNotes, countBookNotes, listBooksFinishedSeries,
+      addClassNote, findClassNote, appendClassNoteTranscript, finishClassNoteRecording,
+      setClassNoteTranslation, setClassNoteMarkdown, renameClassNote, removeClassNote, listClassNotes,
       getSettings, updateHomeCardVisibility, setLastBackupAt, manualSave,
       setFontScale, setTheme, toggleTheme, setTranslationApiKey, updateProfile,
-      FONT_SCALES, THEMES, AVATAR_OPTIONS, BOOK_STATUSES,
+      FONT_SCALES, THEMES, AVATAR_OPTIONS, BOOK_STATUSES, CLASS_NOTE_LANGUAGES,
       exportBackup, importBackup, resetAll,
     };
   }
@@ -1350,6 +1477,6 @@
 
   return {
     STORAGE_KEY, SCHEMA_VERSION, createStore, store,
-    FONT_SCALES, THEMES, AVATAR_OPTIONS, APP_NAME, BOOK_STATUSES,
+    FONT_SCALES, THEMES, AVATAR_OPTIONS, APP_NAME, BOOK_STATUSES, CLASS_NOTE_LANGUAGES,
   };
 });

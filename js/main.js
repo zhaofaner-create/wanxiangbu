@@ -16,15 +16,16 @@
   var finance = require("./modules/finance.js");
   var games = require("./modules/games.js");
   var readingNotes = require("./modules/readingNotes.js");
+  var classNotes = require("./modules/classNotes.js");
   var profile = require("./modules/profile.js");
   var settings = require("./modules/settings.js");
 
-  const MODULES = [home, todayPlan, studyTasks, reminders, mealPlan, inventory, finance, games, readingNotes, profile, settings];
+  const MODULES = [home, todayPlan, studyTasks, reminders, mealPlan, inventory, finance, games, readingNotes, classNotes, profile, settings];
 
   // 侧边导航按"日常/学习/生活/系统"分组展示，比一长条平铺的列表更容易一眼找到东西。
   const NAV_GROUPS = [
     { title: "日常", moduleIds: ["home", "todayPlan"] },
-    { title: "学习", moduleIds: ["studyTasks", "reminders"] },
+    { title: "学习", moduleIds: ["studyTasks", "reminders", "classNotes"] },
     { title: "生活", moduleIds: ["mealPlan", "inventory", "finance", "games", "readingNotes"] },
     { title: "系统", moduleIds: ["profile", "settings"] },
   ];
@@ -41,6 +42,7 @@
     finance: '<rect x="3.5" y="6.5" width="17" height="12" rx="2"/><path d="M3.5 10h17"/><circle cx="16.5" cy="14.5" r="1.4"/>',
     games: '<rect x="3" y="8" width="18" height="9" rx="4"/><path d="M8 10.5v4M6 12.5h4"/><circle cx="16" cy="11.5" r="1"/><circle cx="18.2" cy="13.7" r="1"/>',
     readingNotes: '<path d="M4 5.5c2.4-1 5-1 7 .3v13c-2-1.3-4.6-1.3-7-.3v-13Z"/><path d="M20 5.5c-2.4-1-5-1-7 .3v13c2-1.3 4.6-1.3 7-.3v-13Z"/>',
+    classNotes: '<rect x="9" y="2.5" width="6" height="12" rx="3"/><path d="M5.5 10.5a6.5 6.5 0 0 0 13 0"/><path d="M12 17v3.5M8.5 20.5h7"/>',
     profile: '<circle cx="12" cy="8.3" r="3.3"/><path d="M5.5 19.5c1.2-3.3 4-5 6.5-5s5.3 1.7 6.5 5"/>',
     settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 13.5a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.9 2.9l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.9-2.9l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.6-1h-.2a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1.1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.9-2.9l.1.1a1.7 1.7 0 0 0 1.9.3h.1a1.7 1.7 0 0 0 1-1.6v-.2a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.6h.1a1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.9 2.9l-.1.1a1.7 1.7 0 0 0-.3 1.9v.1a1.7 1.7 0 0 0 1.6 1h.2a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.6 1Z"/>',
   };
@@ -57,6 +59,7 @@
     finance: ["hsl(226, 72%, 76%)", "hsl(226, 60%, 60%)"],
     games: ["hsl(330, 76%, 78%)", "hsl(330, 60%, 64%)"],
     readingNotes: ["hsl(266, 62%, 80%)", "hsl(266, 45%, 64%)"],
+    classNotes: ["hsl(174, 62%, 70%)", "hsl(174, 48%, 50%)"],
     profile: ["hsl(198, 70%, 76%)", "hsl(198, 55%, 58%)"],
     settings: ["hsl(215, 18%, 74%)", "hsl(215, 16%, 56%)"],
   };

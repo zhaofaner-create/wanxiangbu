@@ -1322,3 +1322,97 @@ describe("读书笔记：最近读完趋势图数据", () => {
     assert.equal(series[0].count, 0);
   });
 });
+
+describe("课堂笔记：录音+转录+翻译+AI整理笔记的数据层", () => {
+  test("新建笔记：默认状态是 recording，目标语言里自动去掉跟讲课语言重复的那个", () => {
+    const note = store.addClassNote({ title: "战略课", sourceLang: "fr", targetLangs: ["zh", "fr", "en"] });
+    assert.equal(note.status, "recording");
+    assert.deepEqual(note.targetLangs, ["zh", "en"]);
+    assert.deepEqual(note.transcriptSegments, []);
+    assert.deepEqual(note.translations, {});
+    assert.equal(note.notesMarkdown, "");
+    assert.equal(note.audioKey, null);
+  });
+
+  test("追加转录分段：空文字不追加，正常文字追加后 updatedAt 会更新", async () => {
+    const note = store.addClassNote({ title: "课1" });
+    const createdAt = note.updatedAt;
+    await new Promise((r) => setTimeout(r, 5));
+    store.appendClassNoteTranscript(note.id, { start: 0, end: 3, text: "  " });
+    let found = store.findClassNote(note.id);
+    assert.equal(found.transcriptSegments.length, 0, "空白文字不应该被追加");
+
+    store.appendClassNoteTranscript(note.id, { start: 0, end: 3, text: "Bonjour à tous" });
+    found = store.findClassNote(note.id);
+    assert.equal(found.transcriptSegments.length, 1);
+    assert.equal(found.transcriptSegments[0].text, "Bonjour à tous");
+    assert.notEqual(found.updatedAt, createdAt);
+  });
+
+  test("结束录音：状态变成 recorded，记下时长和音频引用", () => {
+    const note = store.addClassNote({ title: "课2" });
+    const updated = store.finishClassNoteRecording(note.id, { durationSeconds: 66.7, audioKey: "audio-abc" });
+    assert.equal(updated.status, "recorded");
+    assert.equal(updated.audioDurationSeconds, 66.7);
+    assert.equal(updated.audioKey, "audio-abc");
+  });
+
+  test("保存翻译结果：按语言代码分开存，重新生成会整段替换而不是追加", () => {
+    const note = store.addClassNote({ title: "课3" });
+    store.setClassNoteTranslation(note.id, "zh", [{ start: 0, end: 3, text: "大家好" }]);
+    let found = store.findClassNote(note.id);
+    assert.equal(found.translations.zh.length, 1);
+
+    store.setClassNoteTranslation(note.id, "zh", [{ start: 0, end: 3, text: "大家好（重新翻译）" }]);
+    found = store.findClassNote(note.id);
+    assert.equal(found.translations.zh.length, 1);
+    assert.equal(found.translations.zh[0].text, "大家好（重新翻译）");
+  });
+
+  test("保存 AI 整理出的笔记正文：状态变成 notes_ready", () => {
+    const note = store.addClassNote({ title: "课4" });
+    const updated = store.setClassNoteMarkdown(note.id, "# 课程结构\n- 三个模块");
+    assert.equal(updated.status, "notes_ready");
+    assert.equal(updated.notesMarkdown, "# 课程结构\n- 三个模块");
+  });
+
+  test("重命名和删除", () => {
+    const note = store.addClassNote({ title: "原标题" });
+    store.renameClassNote(note.id, "新标题");
+    assert.equal(store.findClassNote(note.id).title, "新标题");
+    store.removeClassNote(note.id);
+    assert.equal(store.findClassNote(note.id), null);
+  });
+
+  test("列表按创建时间倒序", () => {
+    store.addClassNote({ title: "第一条" });
+    store.addClassNote({ title: "第二条" });
+    const list = store.listClassNotes();
+    assert.equal(list.length, 2);
+    assert.equal(list[0].title, "第二条");
+  });
+
+  test("对不存在的笔记 id 操作，安全返回 null 而不是抛错", () => {
+    assert.equal(store.appendClassNoteTranscript("no-such-id", { text: "x" }), null);
+    assert.equal(store.finishClassNoteRecording("no-such-id", {}), null);
+    assert.equal(store.setClassNoteTranslation("no-such-id", "zh", []), null);
+    assert.equal(store.setClassNoteMarkdown("no-such-id", "x"), null);
+    assert.equal(store.renameClassNote("no-such-id", "x"), null);
+  });
+
+  test("老存档（没有 classNotes 字段）能正常兼容补上空数组", () => {
+    const oldArchive = {
+      quickNotes: [], todayPlan: [], studyCourses: [], studyAssignments: [],
+      studyGoals: [], studyCheckins: [], studyDailyLogs: [], reminders: [],
+      mealPlanEntries: [], inventoryItems: [], shoppingListItems: [],
+      financeTransactions: [], financeCategories: ["餐饮"], games: [], gameSessions: [],
+      settings: {},
+    };
+    storage.setItem("faner-app-data", JSON.stringify(oldArchive));
+    const s = createStore(storage);
+    s.init();
+    assert.deepEqual(s.listClassNotes(), []);
+    const note = s.addClassNote({ title: "新功能测试" });
+    assert.ok(note.id);
+  });
+});

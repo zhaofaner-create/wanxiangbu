@@ -221,23 +221,24 @@
       )),
     ]);
 
-    // 翻译服务密钥：先做好这个设置入口，为以后"课堂笔记多语言互译"功能准备；
+    // AI 服务密钥：给"课堂笔记"模块的多语言互译 + AI 整理笔记两个功能用，
+    // 直接从浏览器用这把密钥请求 Anthropic 官方 Claude API，不经过我们自己的任何服务器。
     // 密钥只存在这台设备本地（localStorage），不会写进代码、也不会上传到任何地方，
-    // 分享这份 App 给别人用，对方要用翻译功能就填自己申请的密钥，互不影响、互不花钱。
+    // 分享这份 App 给别人用，对方要用这两个功能就填自己申请的密钥，互不影响、互不花钱。
     const apiKeyInput = h("input", {
       class: "field-input",
       type: "password",
       autocomplete: "off",
-      placeholder: settings.translationApiKey ? "已设置，留空并保存可清除" : "粘贴你自己申请的翻译服务密钥",
+      placeholder: settings.translationApiKey ? "已设置，留空并保存可清除" : "粘贴你自己申请的 Claude API 密钥",
     });
     function saveTranslationApiKey() {
       store.setTranslationApiKey(apiKeyInput.value);
       rerender();
     }
     const translationCard = h("div", { class: "card" }, [
-      cardHeading("key", "翻译服务密钥"),
+      cardHeading("key", "AI 服务密钥"),
       h("div", { class: "settings-card-desc" },
-        "给以后课堂笔记的多语言互译功能用。密钥要你自己去翻译服务商那边申请，只存在这台设备本地，不会被公开或者传到别的地方；分享这个 App 给朋友，他要用翻译得填他自己的密钥。"),
+        "给「课堂笔记」模块的多语言互译和 AI 整理笔记这两个功能用，去 Anthropic 官网申请一个属于你自己的 Claude API 密钥填在这里；密钥只存在这台设备本地，不会被公开或者传到别的地方；分享这个 App 给朋友，他要用这两个功能得填他自己的密钥。"),
       h("div", { class: "settings-status-line" + (settings.translationApiKey ? "" : " unsaved") },
         settings.translationApiKey ? "已设置密钥" : "还没有设置密钥"),
       h("div", { class: "section-row" }, [

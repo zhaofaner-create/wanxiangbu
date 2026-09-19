@@ -932,3 +932,25 @@ table.data-table th { background: rgba(255,255,255,0.5); font-weight: 700; color
   .modal-box { padding: 18px 16px; width: 92vw; }
   .quick-memo-panel { right: 12px; left: 12px; width: auto; }
 }
+
+/* ---------- 课堂笔记模块：AI 整理笔记的 Markdown 渲染 + 录音页的实时转录 ---------- */
+
+.note-markdown { font-size: 13.5px; line-height: 1.7; color: var(--text-primary); }
+.note-md-heading { margin: 16px 0 8px; font-weight: 700; color: var(--text-primary); }
+.note-md-heading:first-child { margin-top: 0; }
+.note-md-paragraph { margin: 0 0 10px; }
+.note-md-list { margin: 0 0 10px; padding-left: 22px; }
+.note-md-list li { margin-bottom: 4px; }
+.note-md-quote {
+  margin: 0 0 10px; padding: 8px 14px; border-left: 3px solid var(--g-hairline);
+  color: var(--text-secondary); font-style: italic;
+}
+.note-markdown code {
+  background: rgba(0, 0, 0, 0.06); border-radius: 4px; padding: 1px 5px;
+  font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+:root[data-theme="night"] .note-markdown code { background: rgba(255, 255, 255, 0.12); }
+
+.record-caption { min-height: 20px; margin-top: 8px; padding-top: 8px; font-size: 13px; color: var(--text-muted); font-style: italic; border-top: 1px dashed var(--g-hairline); }
+.record-transcript-list { max-height: 360px; overflow-y: auto; }
+.record-transcript-list:empty::before { content: "还没有转录内容，开始说话后会实时出现在这里"; color: var(--text-muted); font-size: 13px; }

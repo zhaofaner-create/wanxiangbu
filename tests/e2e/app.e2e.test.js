@@ -31,12 +31,12 @@ afterEach(async () => {
 });
 
 describe("整体框架", () => {
-  test("加载后默认停在首页，导航栏有11个模块入口，且没有任何登录界面（PRD验收标准2：免登录）", async () => {
+  test("加载后默认停在首页，导航栏有12个模块入口，且没有任何登录界面（PRD验收标准2：免登录）", async () => {
     await assert.doesNotReject(page.waitForSelector(".topbar-title"));
     const title = await page.locator("#topbar-title").innerText();
     assert.equal(title, "首页总览");
     const navCount = await page.locator(".nav-item").count();
-    assert.equal(navCount, 11); // 9个原有模块 + 读书笔记 + 个人信息
+    assert.equal(navCount, 12); // 9个原有模块 + 读书笔记 + 课堂笔记 + 个人信息
     assert.equal(await page.locator('input[type=password]').count(), 0);
     assert.equal(await page.locator("text=登录").count(), 0);
   });
@@ -54,7 +54,7 @@ describe("整体框架", () => {
 
     const expected = {
       "日常": ["首页总览", "今日计划"],
-      "学习": ["学习任务", "提醒事项"],
+      "学习": ["学习任务", "提醒事项", "课堂笔记"],
       "生活": ["饮食计划", "库存管理", "个人记账", "游戏娱乐", "读书笔记"],
       "系统": ["个人信息", "数据与设置"],
     };
@@ -973,10 +973,10 @@ describe("数据与设置：手动保存", () => {
   });
 });
 
-describe("数据与设置：翻译服务密钥（为以后课堂笔记翻译功能准备的设置项）", () => {
+describe("数据与设置：AI 服务密钥（课堂笔记多语言互译+AI整理笔记用）", () => {
   test("填入密钥并保存，刷新后还在；清空并保存后恢复成未设置", async () => {
     await goToModule(page, "数据与设置");
-    const keyCard = page.locator(".card", { hasText: "翻译服务密钥" });
+    const keyCard = page.locator(".card", { hasText: "AI 服务密钥" });
     await assert.doesNotReject(keyCard.waitFor());
     assert.match(await keyCard.innerText(), /还没有设置密钥/);
 
@@ -988,7 +988,7 @@ describe("数据与设置：翻译服务密钥（为以后课堂笔记翻译功�
     await page.reload();
     await page.waitForSelector(".nav-item");
     await goToModule(page, "数据与设置");
-    const keyCardAfterReload = page.locator(".card", { hasText: "翻译服务密钥" });
+    const keyCardAfterReload = page.locator(".card", { hasText: "AI 服务密钥" });
     assert.match(await keyCardAfterReload.innerText(), /已设置密钥/);
 
     // 清空输入框再保存，等于清除这个密钥。
@@ -1000,7 +1000,7 @@ describe("数据与设置：翻译服务密钥（为以后课堂笔记翻译功�
 
   test("密钥输入框是 password 类型，不会在屏幕上明文显示", async () => {
     await goToModule(page, "数据与设置");
-    const keyCard = page.locator(".card", { hasText: "翻译服务密钥" });
+    const keyCard = page.locator(".card", { hasText: "AI 服务密钥" });
     assert.equal(await keyCard.locator("input[type=password]").count(), 1);
   });
 });
