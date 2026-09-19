@@ -973,7 +973,7 @@ describe("数据与设置：手动保存", () => {
   });
 });
 
-describe("数据与设置：AI 服务密钥（课堂笔记多语言互译+AI整理笔记用）", () => {
+describe("数据与设置：AI 服务密钥（课堂笔记 AI 整理笔记用）", () => {
   test("填入密钥并保存，刷新后还在；清空并保存后恢复成未设置", async () => {
     await goToModule(page, "数据与设置");
     const keyCard = page.locator(".card", { hasText: "AI 服务密钥" });

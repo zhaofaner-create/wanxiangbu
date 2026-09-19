@@ -20,14 +20,16 @@
   const { saveAudio, deleteAudio, makeAudioKey } = require("../components/audioStore.js");
   const { parseMarkdownBlocks, parseInlineSegments } = require("../components/markdown.js");
   const aiClient = require("../aiClient.js");
+  const translationProviders = require("../translationProviders.js");
 
   const meta = { id: "classNotes", label: "课堂笔记", title: "课堂笔记", subtitle: "录音转文字 · 多语言互译 · AI整理笔记" };
 
   // 录音转文字这一步走的是浏览器自带的 Web Speech API，免费、不需要密钥，但要联网
   // （语音识别在云端做），目前只有 Chrome / Edge 等 Chromium 内核浏览器支持得比较好；
-  // "翻译"和"整理笔记"这两步走的是用户自己在「数据与设置」填的 Claude API 密钥，
-  // 直接从浏览器调用 Anthropic 官方接口，不经过我们自己的任何服务器——这两处都是
-  // 本模块特有的联网点，跟 App 其它模块的"完全离线"不一样，README 里有对应说明。
+  // "整理笔记"用的是用户自己在「数据与设置」填的 Claude API 密钥；"翻译"用的是用户在
+  // 「数据与设置」的「多语言互译服务」里选中的那一家（Google 翻译/Azure Translator/
+  // DeepL）的密钥——两者都是直接从浏览器调用官方接口，不经过我们自己的任何服务器。
+  // 这些都是本模块特有的联网点，跟 App 其它模块的"完全离线"不一样，README 里有对应说明。
 
   // Web Speech API 认的是 BCP-47 语言标签（比如 "fr-FR"），跟 store.js 里
   // CLASS_NOTE_LANGUAGES 用的两位 ISO 代码不是一回事，这里做个映射。
@@ -57,6 +59,21 @@
   function langLabel(store, code) {
     const item = store.CLASS_NOTE_LANGUAGES.find((l) => l.code === code);
     return item ? item.label : code;
+  }
+
+  function providerLabel(store, code) {
+    const item = store.TRANSLATION_PROVIDER_OPTIONS.find((p) => p.code === code);
+    return item ? item.label : code;
+  }
+
+  /** 把 settings 里三家翻译服务各自的字段收拢成 translationProviders.js 认的 keys 形状。 */
+  function translationKeysFromSettings(settings) {
+    return {
+      googleApiKey: settings.googleTranslateApiKey,
+      azureApiKey: settings.azureTranslatorApiKey,
+      azureRegion: settings.azureTranslatorRegion,
+      deeplApiKey: settings.deeplApiKey,
+    };
   }
 
   function statusLabel(note) {
@@ -364,7 +381,12 @@
       rerender();
       return;
     }
-    const hasKey = Boolean(store.getSettings().translationApiKey);
+    const settings = store.getSettings();
+    const hasClaudeKey = Boolean(settings.claudeApiKey);
+    const hasTranslationKey = translationProviders.isProviderConfigured(
+      settings.translationProvider,
+      translationKeysFromSettings(settings)
+    );
 
     function openRenameModal() {
       openFormModal({
@@ -387,7 +409,7 @@
     function renderNotesTab() {
       const statusEl = h(
         "div", { class: "muted", style: "font-size:12px;margin:6px 0 10px;" },
-        hasKey ? "" : "还没设置 AI 服务密钥，去「数据与设置」填一个才能用这个功能"
+        hasClaudeKey ? "" : "还没设置 AI 服务密钥，去「数据与设置」填一个才能用这个功能"
       );
 
       async function generateNotes() {
@@ -396,9 +418,8 @@
         genBtn.textContent = "整理中…";
         statusEl.textContent = "AI 正在整理笔记，可能需要几秒到十几秒…";
         try {
-          const settings = store.getSettings();
           const text = await aiClient.callClaude({
-            apiKey: settings.translationApiKey,
+            apiKey: store.getSettings().claudeApiKey,
             system: "你是一个帮学生整理课堂笔记的助手，只输出笔记正文本身，不要输出任何多余的解释。",
             prompt: aiClient.buildNotesPrompt(note.transcriptSegments, note.sourceLang),
           });
@@ -415,7 +436,7 @@
         "button",
         {
           class: "btn btn-primary", type: "button",
-          disabled: !hasKey || !note.transcriptSegments.length || undefined,
+          disabled: !hasClaudeKey || !note.transcriptSegments.length || undefined,
           onClick: generateNotes,
         },
         note.notesMarkdown ? "重新整理笔记" : "生成笔记"
@@ -443,24 +464,25 @@
 
       function buildBody() {
         const translated = note.translations[activeTranslationLang] || [];
+        const currentProvider = store.getSettings().translationProvider;
         const statusEl = h(
           "div", { class: "muted", style: "font-size:12px;margin:6px 0 10px;" },
-          hasKey ? "" : "还没设置 AI 服务密钥，去「数据与设置」填一个才能用这个功能"
+          hasTranslationKey ? "" : `还没配置当前使用的翻译服务（${providerLabel(store, currentProvider)}），去「数据与设置」的「多语言互译服务」里填一个才能用这个功能`
         );
 
         async function translateNow() {
           transBtn.disabled = true;
           const prevLabel = transBtn.textContent;
           transBtn.textContent = "翻译中…";
-          statusEl.textContent = "AI 正在翻译，可能需要几秒到十几秒…";
+          statusEl.textContent = `${providerLabel(store, currentProvider)}正在翻译，可能需要几秒…`;
           try {
             const settings = store.getSettings();
-            const text = await aiClient.callClaude({
-              apiKey: settings.translationApiKey,
-              system: "你是一个专业的课堂笔记翻译助手，严格按要求的格式输出，不要有多余解释。",
-              prompt: aiClient.buildTranslatePrompt(note.transcriptSegments, activeTranslationLang),
+            const segments = await translationProviders.translateSegments({
+              provider: settings.translationProvider,
+              segments: note.transcriptSegments,
+              targetLangCode: activeTranslationLang,
+              keys: translationKeysFromSettings(settings),
             });
-            const segments = aiClient.parseTranslateResponse(text, note.transcriptSegments);
             store.setClassNoteTranslation(note.id, activeTranslationLang, segments);
             rerender();
           } catch (err) {
@@ -474,7 +496,7 @@
           "button",
           {
             class: "btn btn-outline", type: "button",
-            disabled: !hasKey || !note.transcriptSegments.length || undefined,
+            disabled: !hasTranslationKey || !note.transcriptSegments.length || undefined,
             onClick: translateNow,
           },
           translated.length ? "重新翻译" : `翻译成${langLabel(store, activeTranslationLang)}`
@@ -592,7 +614,15 @@
 
   function renderListView(container, store, ctx, rerender) {
     const notes = store.listClassNotes();
-    const hasKey = Boolean(store.getSettings().translationApiKey);
+    const settings = store.getSettings();
+    const hasClaudeKey = Boolean(settings.claudeApiKey);
+    const hasTranslationKey = translationProviders.isProviderConfigured(
+      settings.translationProvider,
+      translationKeysFromSettings(settings)
+    );
+    const missingKeyHints = [];
+    if (!hasClaudeKey) missingKeyHints.push("AI 整理笔记需要先填 Claude API 密钥");
+    if (!hasTranslationKey) missingKeyHints.push(`多语言互译需要先配置当前使用的翻译服务（${providerLabel(store, settings.translationProvider)}）密钥`);
     const browserOk = checkBrowserSupport();
 
     function renderNoteCard(note) {
@@ -680,7 +710,9 @@
         ]),
         activeBanner,
         browserOk ? null : h("div", { class: "empty-hint" }, "当前浏览器不支持录音转文字，建议换用最新版 Chrome 或 Edge 桌面浏览器；已有的笔记不受影响，仍然可以查看。"),
-        hasKey ? null : h("div", { class: "empty-hint" }, "还没设置 AI 服务密钥：录音转文字不需要密钥，但多语言互译和 AI 整理笔记需要先去「数据与设置」填一个你自己申请的 Claude API 密钥。"),
+        missingKeyHints.length
+          ? h("div", { class: "empty-hint" }, `还没配置好 AI 相关功能：录音转文字不需要密钥；${missingKeyHints.join("；")}，去「数据与设置」填一下。`)
+          : null,
         notes.length ? h("div", { class: "summary-grid" }, notes.map(renderNoteCard)) : h("div", { class: "empty-hint" }, "还没有课堂笔记，点右上角开始第一条录音吧"),
       ])
     );

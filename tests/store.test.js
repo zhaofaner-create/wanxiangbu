@@ -1076,12 +1076,56 @@ describe("设置：外观（字体字号 / 白天夜间主题）", () => {
     assert.equal(store.getSettings().theme, "day");
   });
 
-  test("setTranslationApiKey：默认为空字符串，设置后能读回来，去掉首尾空格，传空字符串等于清除", () => {
-    assert.equal(store.getSettings().translationApiKey, "");
-    store.setTranslationApiKey("  sk-test-12345  ");
-    assert.equal(store.getSettings().translationApiKey, "sk-test-12345");
-    store.setTranslationApiKey("");
-    assert.equal(store.getSettings().translationApiKey, "");
+  test("setClaudeApiKey：默认为空字符串，设置后能读回来，去掉首尾空格，传空字符串等于清除", () => {
+    assert.equal(store.getSettings().claudeApiKey, "");
+    store.setClaudeApiKey("  sk-test-12345  ");
+    assert.equal(store.getSettings().claudeApiKey, "sk-test-12345");
+    store.setClaudeApiKey("");
+    assert.equal(store.getSettings().claudeApiKey, "");
+  });
+
+  test("老存档里只有 translationApiKey（早期版本翻译和整理笔记共用一把密钥）时，会自动迁移成 claudeApiKey", () => {
+    const s = createStore(storage);
+    storage.setItem("faner-app-data", JSON.stringify({
+      schemaVersion: 1,
+      quickNotes: [], todayPlan: [], studyCourses: [], studyAssignments: [],
+      studyGoals: [], studyCheckins: [], studyDailyLogs: [], reminders: [],
+      mealPlanEntries: [], inventoryItems: [], shoppingListItems: [],
+      financeTransactions: [], financeCategories: ["餐饮"], games: [], gameSessions: [],
+      settings: { translationApiKey: "sk-old-key" },
+    }));
+    s.init();
+    assert.equal(s.getSettings().claudeApiKey, "sk-old-key");
+  });
+
+  test("翻译服务：默认 provider 是 google，三家密钥和 Azure 区域默认为空字符串", () => {
+    const settings = store.getSettings();
+    assert.equal(settings.translationProvider, "google");
+    assert.equal(settings.googleTranslateApiKey, "");
+    assert.equal(settings.azureTranslatorApiKey, "");
+    assert.equal(settings.azureTranslatorRegion, "");
+    assert.equal(settings.deeplApiKey, "");
+  });
+
+  test("setTranslationProvider：三选一，非法值忽略", () => {
+    store.setTranslationProvider("azure");
+    assert.equal(store.getSettings().translationProvider, "azure");
+    store.setTranslationProvider("not-a-provider");
+    assert.equal(store.getSettings().translationProvider, "azure", "非法值应该被忽略，不能覆盖已有值");
+    store.setTranslationProvider("deepl");
+    assert.equal(store.getSettings().translationProvider, "deepl");
+  });
+
+  test("三家翻译服务密钥各自独立存取，互不影响", () => {
+    store.setGoogleTranslateApiKey("  google-key  ");
+    store.setAzureTranslatorApiKey("azure-key");
+    store.setAzureTranslatorRegion("  eastasia  ");
+    store.setDeeplApiKey("deepl-key:fx");
+    const settings = store.getSettings();
+    assert.equal(settings.googleTranslateApiKey, "google-key");
+    assert.equal(settings.azureTranslatorApiKey, "azure-key");
+    assert.equal(settings.azureTranslatorRegion, "eastasia");
+    assert.equal(settings.deeplApiKey, "deepl-key:fx");
   });
 
   test("老存档里 settings 没有 fontScale/theme/profile 字段时，重新 init 应该自动补上默认值（不能变成 undefined）", () => {
@@ -1099,7 +1143,7 @@ describe("设置：外观（字体字号 / 白天夜间主题）", () => {
     assert.equal(settings.fontScale, "medium", "老存档缺失的字段要补上默认值");
     assert.equal(settings.theme, "day");
     assert.deepEqual(settings.profile, { name: "", avatar: "🙂", avatarImage: null });
-    assert.equal(settings.translationApiKey, "", "老存档缺失的翻译密钥字段也要补上默认空字符串，不能是 undefined");
+    assert.equal(settings.claudeApiKey, "", "老存档缺失的 AI 密钥字段也要补上默认空字符串，不能是 undefined");
     assert.equal(settings.homeCards.study, false, "老存档里已有的字段要保留，不能被默认值覆盖");
   });
 });

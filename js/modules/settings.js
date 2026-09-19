@@ -42,6 +42,7 @@
     grid: '<rect x="4" y="4" width="7" height="7" rx="1.2"/><rect x="13" y="4" width="7" height="7" rx="1.2"/><rect x="4" y="13" width="7" height="7" rx="1.2"/><rect x="13" y="13" width="7" height="7" rx="1.2"/>',
     warn: '<path d="M12 4 3 20h18L12 4Z"/><path d="M12 10.5v4M12 17h.01"/>',
     key: '<circle cx="8" cy="15" r="4"/><path d="M11 12 19 4M15 8l2.5 2.5M18 5l2.5 2.5"/>',
+    globe: '<circle cx="12" cy="12" r="8"/><path d="M4 12h16M12 4c2.5 2.5 2.5 13 0 16M12 4c-2.5 2.5-2.5 13 0 16"/>',
   };
   const ICON_COLORS = {
     save: ["hsl(206, 88%, 74%)", "hsl(206, 78%, 58%)"],
@@ -49,6 +50,7 @@
     grid: ["hsl(248, 72%, 78%)", "hsl(248, 55%, 64%)"],
     warn: ["hsl(8, 88%, 74%)", "hsl(355, 70%, 62%)"],
     key: ["hsl(150, 55%, 70%)", "hsl(150, 45%, 52%)"],
+    globe: ["hsl(202, 80%, 74%)", "hsl(202, 62%, 54%)"],
   };
   // 生成备份文件名——不放在 render() 里面，是为了能被单元测试直接调用验证格式，
   // 不用真的跑一遍浏览器点击下载才能确认文件名对不对。
@@ -221,29 +223,108 @@
       )),
     ]);
 
-    // AI 服务密钥：给"课堂笔记"模块的多语言互译 + AI 整理笔记两个功能用，
-    // 直接从浏览器用这把密钥请求 Anthropic 官方 Claude API，不经过我们自己的任何服务器。
-    // 密钥只存在这台设备本地（localStorage），不会写进代码、也不会上传到任何地方，
-    // 分享这份 App 给别人用，对方要用这两个功能就填自己申请的密钥，互不影响、互不花钱。
+    // AI 服务密钥：只给"课堂笔记"模块的 AI 整理笔记这一个功能用（多语言互译已经改用
+    // 下面「多语言互译服务」卡片里那三家专门的翻译服务），直接从浏览器用这把密钥请求
+    // Anthropic 官方 Claude API，不经过我们自己的任何服务器。密钥只存在这台设备本地
+    // （localStorage），不会写进代码、也不会上传到任何地方，分享这份 App 给别人用，
+    // 对方要用这个功能就填自己申请的密钥，互不影响、互不花钱。
     const apiKeyInput = h("input", {
       class: "field-input",
       type: "password",
       autocomplete: "off",
-      placeholder: settings.translationApiKey ? "已设置，留空并保存可清除" : "粘贴你自己申请的 Claude API 密钥",
+      placeholder: settings.claudeApiKey ? "已设置，留空并保存可清除" : "粘贴你自己申请的 Claude API 密钥",
     });
-    function saveTranslationApiKey() {
-      store.setTranslationApiKey(apiKeyInput.value);
+    function saveClaudeApiKey() {
+      store.setClaudeApiKey(apiKeyInput.value);
       rerender();
     }
     const translationCard = h("div", { class: "card" }, [
       cardHeading("key", "AI 服务密钥"),
       h("div", { class: "settings-card-desc" },
-        "给「课堂笔记」模块的多语言互译和 AI 整理笔记这两个功能用，去 Anthropic 官网申请一个属于你自己的 Claude API 密钥填在这里；密钥只存在这台设备本地，不会被公开或者传到别的地方；分享这个 App 给朋友，他要用这两个功能得填他自己的密钥。"),
-      h("div", { class: "settings-status-line" + (settings.translationApiKey ? "" : " unsaved") },
-        settings.translationApiKey ? "已设置密钥" : "还没有设置密钥"),
+        "给「课堂笔记」模块的 AI 整理笔记功能用，去 Anthropic 官网申请一个属于你自己的 Claude API 密钥填在这里；密钥只存在这台设备本地，不会被公开或者传到别的地方；分享这个 App 给朋友，他要用这个功能得填他自己的密钥。"),
+      h("div", { class: "settings-status-line" + (settings.claudeApiKey ? "" : " unsaved") },
+        settings.claudeApiKey ? "已设置密钥" : "还没有设置密钥"),
       h("div", { class: "section-row" }, [
         apiKeyInput,
-        h("button", { class: "btn btn-outline", type: "button", onClick: saveTranslationApiKey }, "保存"),
+        h("button", { class: "btn btn-outline", type: "button", onClick: saveClaudeApiKey }, "保存"),
+      ]),
+    ]);
+
+    // 多语言互译服务：Google 翻译 / Azure Translator / DeepL 三选一，各自的密钥分开填、
+    // 分开存，"当前使用"选中哪一家，「课堂笔记」的翻译按钮就调用哪一家；换一家随时免费
+    // 切换，不影响已经翻译好的内容，也不会多花钱。三家密钥同样只存在这台设备本地。
+    function providerKeyField({ statusOk, inputs, saveFn }) {
+      return h("div", { style: "display:flex;flex-direction:column;gap:6px;" }, [
+        h("div", { class: "settings-status-line" + (statusOk ? "" : " unsaved") }, statusOk ? "已设置" : "还没有设置"),
+        h("div", { class: "section-row" }, [
+          ...inputs,
+          h("button", { class: "btn btn-outline btn-sm", type: "button", onClick: saveFn }, "保存"),
+        ]),
+      ]);
+    }
+
+    const googleKeyInput = h("input", {
+      class: "field-input", type: "password", autocomplete: "off",
+      placeholder: settings.googleTranslateApiKey ? "已设置，留空并保存可清除" : "Google Cloud Translation API 密钥",
+    });
+    function saveGoogleKey() {
+      store.setGoogleTranslateApiKey(googleKeyInput.value);
+      rerender();
+    }
+
+    const azureKeyInput = h("input", {
+      class: "field-input", type: "password", autocomplete: "off",
+      placeholder: settings.azureTranslatorApiKey ? "已设置，留空并保存可清除" : "Azure Translator 密钥",
+    });
+    const azureRegionInput = h("input", {
+      class: "field-input", type: "text", autocomplete: "off", style: "max-width:140px;",
+      placeholder: settings.azureTranslatorRegion || "资源区域，如 eastasia",
+      value: settings.azureTranslatorRegion || "",
+    });
+    function saveAzureKey() {
+      store.setAzureTranslatorApiKey(azureKeyInput.value);
+      store.setAzureTranslatorRegion(azureRegionInput.value);
+      rerender();
+    }
+
+    const deeplKeyInput = h("input", {
+      class: "field-input", type: "password", autocomplete: "off",
+      placeholder: settings.deeplApiKey ? "已设置，留空并保存可清除" : "DeepL API 密钥",
+    });
+    function saveDeeplKey() {
+      store.setDeeplApiKey(deeplKeyInput.value);
+      rerender();
+    }
+
+    const providerLabels = { google: "Google 翻译", azure: "Azure Translator", deepl: "DeepL" };
+    const translationProvidersCard = h("div", { class: "card" }, [
+      cardHeading("globe", "多语言互译服务"),
+      h("div", { class: "settings-card-desc" },
+        "给「课堂笔记」模块的多语言互译功能用，三家可以都填，下面选一个「当前使用」，翻译按钮只会调用选中的这一家；随时可以切换，不影响已经翻译好的内容。每家都要去对应官网自己申请密钥。"),
+      h("div", { class: "field-label", style: "margin:4px 0 6px;" }, "当前使用"),
+      createSegmented({
+        kind: "tabs",
+        options: store.TRANSLATION_PROVIDER_OPTIONS.map((p) => ({ key: p.code, label: p.label })),
+        activeKey: settings.translationProvider,
+        onSelect: (key) => { store.setTranslationProvider(key); rerender(); },
+      }).el,
+      h("div", { style: "display:flex;flex-direction:column;gap:14px;margin-top:14px;" }, [
+        h("div", { "data-provider": "google" }, [
+          h("div", { class: "field-label", style: "margin-bottom:6px;" }, providerLabels.google),
+          providerKeyField({ statusOk: Boolean(settings.googleTranslateApiKey), inputs: [googleKeyInput], saveFn: saveGoogleKey }),
+        ]),
+        h("div", { "data-provider": "azure" }, [
+          h("div", { class: "field-label", style: "margin-bottom:6px;" }, providerLabels.azure),
+          providerKeyField({
+            statusOk: Boolean(settings.azureTranslatorApiKey && settings.azureTranslatorRegion),
+            inputs: [azureKeyInput, azureRegionInput],
+            saveFn: saveAzureKey,
+          }),
+        ]),
+        h("div", { "data-provider": "deepl" }, [
+          h("div", { class: "field-label", style: "margin-bottom:6px;" }, providerLabels.deepl),
+          providerKeyField({ statusOk: Boolean(settings.deeplApiKey), inputs: [deeplKeyInput], saveFn: saveDeeplKey }),
+        ]),
       ]),
     ]);
 
@@ -273,6 +354,7 @@
           h("div", { class: "settings-section-label" }, "偏好设置"),
           appearanceCard,
           homeCardsCard,
+          translationProvidersCard,
           translationCard,
         ]),
       ]),

@@ -113,6 +113,65 @@ async function setApiKey(page, key) {
   await page.locator(".card", { hasText: "AI 服务密钥" }).locator("button", { hasText: "保存" }).click();
 }
 
+// 三家翻译服务的请求都带自定义请求头或 JSON content-type，属于"非简单请求"，
+// 真实浏览器会先发一次 OPTIONS 预检，预检和正式响应都要带上 CORS 头，fetch() 才能
+// 拿到响应内容——跟 mockClaudeApi 是同一个道理，只是每家允许的请求头不一样。
+async function fulfillWithCors(route, body, extraHeaders) {
+  if (route.request().method() === "OPTIONS") {
+    await route.fulfill({
+      status: 204,
+      headers: {
+        "access-control-allow-origin": "*",
+        "access-control-allow-methods": "POST, OPTIONS",
+        "access-control-allow-headers": "content-type, ocp-apim-subscription-key, ocp-apim-subscription-region, authorization",
+      },
+    });
+    return;
+  }
+  await route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    headers: { "access-control-allow-origin": "*", ...(extraHeaders || {}) },
+    body: JSON.stringify(body),
+  });
+}
+
+/** 拦截三家翻译服务里的一家；每家的真实 URL/方法都不一样，按 provider 分别处理。 */
+async function mockTranslateApi(page, provider, translatedTexts) {
+  const texts = Array.isArray(translatedTexts) ? translatedTexts : [translatedTexts];
+  if (provider === "google") {
+    await page.route("https://translation.googleapis.com/language/translate/v2**", (route) =>
+      fulfillWithCors(route, { data: { translations: texts.map((t) => ({ translatedText: t })) } })
+    );
+    return;
+  }
+  if (provider === "azure") {
+    await page.route("https://api.cognitive.microsofttranslator.com/translate**", (route) =>
+      fulfillWithCors(route, texts.map((t) => ({ translations: [{ text: t, to: "en" }] })))
+    );
+    return;
+  }
+  if (provider === "deepl") {
+    await page.route("https://api-free.deepl.com/v2/translate", (route) =>
+      fulfillWithCors(route, { translations: texts.map((t) => ({ text: t })) })
+    );
+    return;
+  }
+  throw new Error("不认识的 provider: " + provider);
+}
+
+/** 在「数据与设置」的「多语言互译服务」卡片里，切到某一家并填好它要求的字段。 */
+async function setTranslationProvider(page, provider, { apiKey, region } = {}) {
+  await goToModule(page, "数据与设置");
+  const providerLabels = { google: "Google 翻译", azure: "Azure Translator", deepl: "DeepL" };
+  const card = page.locator(".card", { hasText: "多语言互译服务" });
+  await card.locator(".tab-btn", { hasText: providerLabels[provider] }).click();
+  const row = card.locator(`[data-provider="${provider}"]`);
+  if (apiKey !== undefined) await row.locator("input[type=password]").fill(apiKey);
+  if (region !== undefined) await row.locator("input[type=text]").fill(region);
+  await row.locator("button", { hasText: "保存" }).click();
+}
+
 async function startNewRecording(page, { title = "", targetLangLabel } = {}) {
   await goToModule(page, "课堂笔记");
   await page.locator("button", { hasText: "+ 新建课堂笔记" }).click();
@@ -258,14 +317,24 @@ describe("课堂笔记：AI 整理笔记", () => {
 });
 
 describe("课堂笔记：多语言互译", () => {
-  test("选了互译语言的笔记，翻译后能在对应语言 tab 里看到结果", async () => {
-    await setApiKey(page, "sk-test-key");
+  test("没有配置当前使用的翻译服务时，翻译按钮禁用并提示去设置", async () => {
+    await startNewRecording(page, { title: "没配置翻译服务的笔记", targetLangLabel: "中文" });
+    await page.evaluate(() => window.__emitTranscript("Bonjour à tous", true));
+    await page.locator("button", { hasText: "结束录音" }).click();
+    await page.locator(".tabs .tab-btn", { hasText: "翻译" }).click();
+    await assert.doesNotReject(page.locator(".content-area", { hasText: "还没配置当前使用的翻译服务" }).first().waitFor());
+    assert.match(await page.locator(".content-area").innerText(), /Google 翻译/);
+    assert.equal(await page.locator("button", { hasText: "翻译成中文" }).isDisabled(), true);
+  });
+
+  test("默认用 Google 翻译：选了互译语言的笔记，翻译后能在对应语言 tab 里看到结果", async () => {
+    await setTranslationProvider(page, "google", { apiKey: "google-test-key" });
     await startNewRecording(page, { title: "互译测试", targetLangLabel: "中文" });
     await page.evaluate(() => window.__emitTranscript("Bonjour à tous", true));
     await assert.doesNotReject(page.locator(".record-transcript-list", { hasText: "Bonjour à tous" }).waitFor());
     await page.locator("button", { hasText: "结束录音" }).click();
 
-    await mockClaudeApi(page, "0|大家好");
+    await mockTranslateApi(page, "google", "大家好");
 
     await page.locator(".tabs .tab-btn", { hasText: "翻译" }).click();
     await assert.doesNotReject(page.locator(".pill", { hasText: "中文" }).waitFor());
@@ -274,8 +343,49 @@ describe("课堂笔记：多语言互译", () => {
     await assert.doesNotReject(page.locator(".content-area", { hasText: "大家好" }).waitFor());
   });
 
+  test("切到 Azure Translator 之后，翻译按钮改用 Azure 的接口", async () => {
+    await setTranslationProvider(page, "azure", { apiKey: "azure-test-key", region: "eastasia" });
+    await startNewRecording(page, { title: "Azure互译测试", targetLangLabel: "英语" });
+    await page.evaluate(() => window.__emitTranscript("你好，大家好", true));
+    await assert.doesNotReject(page.locator(".record-transcript-list", { hasText: "你好，大家好" }).waitFor());
+    await page.locator("button", { hasText: "结束录音" }).click();
+
+    await mockTranslateApi(page, "azure", "Hello everyone");
+
+    await page.locator(".tabs .tab-btn", { hasText: "翻译" }).click();
+    await page.locator("button", { hasText: "翻译成英语" }).click();
+
+    await assert.doesNotReject(page.locator(".content-area", { hasText: "Hello everyone" }).waitFor());
+  });
+
+  test("切到 DeepL 之后翻译报错（密钥无效）时，显示错误提示且不清空原有内容", async () => {
+    await setTranslationProvider(page, "deepl", { apiKey: "deepl-key:fx" });
+    await startNewRecording(page, { title: "DeepL报错测试", targetLangLabel: "英语" });
+    await page.evaluate(() => window.__emitTranscript("你好", true));
+    await page.locator("button", { hasText: "结束录音" }).click();
+
+    await page.route("https://api-free.deepl.com/v2/translate", async (route) => {
+      if (route.request().method() === "OPTIONS") {
+        await route.fulfill({
+          status: 204,
+          headers: { "access-control-allow-origin": "*", "access-control-allow-headers": "content-type, authorization" },
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 403,
+        contentType: "application/json",
+        headers: { "access-control-allow-origin": "*" },
+        body: JSON.stringify({ message: "Invalid auth key" }),
+      });
+    });
+
+    await page.locator(".tabs .tab-btn", { hasText: "翻译" }).click();
+    await page.locator("button", { hasText: "翻译成英语" }).click();
+    await assert.doesNotReject(page.locator(".content-area", { hasText: "DeepL 密钥无效或没有权限" }).first().waitFor());
+  });
+
   test("创建时没选互译语言，翻译 tab 提示没有可互译的语言", async () => {
-    await setApiKey(page, "sk-test-key");
     await startNewRecording(page, { title: "没选语言测试" });
     await page.locator("button", { hasText: "结束录音" }).click();
     await page.locator(".tabs .tab-btn", { hasText: "翻译" }).click();

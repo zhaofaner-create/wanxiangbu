@@ -88,11 +88,24 @@
         // 为 null 时表示"没有上传照片，用下面 avatar 这个 emoji"。两者都存着，
         // 上传照片只是优先显示，不会覆盖/丢失用户之前选的 emoji，方便随时切回去。
         profile: { name: "", avatar: "🙂", avatarImage: null },
-        // 翻译服务密钥：给以后"课堂笔记多语言互译"功能用的，用户自己去翻译服务商
-        // 那边申请、自己填在这里，只存在这台设备本地，绝不写进代码仓库、也不会
-        // 发去别的地方——每个人（包括分享这份App给的朋友）都用自己的密钥、自己那份
-        // 免费额度，不会互相占用、也不会算到别人账上。为空字符串表示还没配置。
-        translationApiKey: "",
+        // Claude API 密钥：只给「课堂笔记」的"AI 整理笔记"这一个功能用（多语言互译已经
+        // 改用下面三家专门的翻译服务，不再用 Claude 翻译）。用户自己去 Anthropic 官网
+        // 申请、自己填在这里，只存在这台设备本地，绝不写进代码仓库、也不会发去别的
+        // 地方——每个人（包括分享这份App给的朋友）都用自己的密钥、自己那份额度，
+        // 不会互相占用、也不会算到别人账上。为空字符串表示还没配置。
+        // 字段名沿用了历史上的 translationApiKey（早期版本设计成翻译也用 Claude），
+        // mergeSettingsDefaults 里会把老存档的 translationApiKey 自动迁移过来，不会丢失
+        // 用户已经填过的密钥。
+        claudeApiKey: "",
+        // 多语言互译现在接入三家专门的翻译服务，各自的密钥分开存，互不影响；
+        // translationProvider 记的是"当前生效用哪一家"，翻译按钮只会调用这一家，
+        // 换成另一家随时免费切换，不会多花钱、也不会影响已经翻译好的内容。
+        // Azure 这家验证请求时除了密钥还需要"资源区域"，所以单独多一个字段。
+        translationProvider: "google",
+        googleTranslateApiKey: "",
+        azureTranslatorApiKey: "",
+        azureTranslatorRegion: "",
+        deeplApiKey: "",
       },
       // 读书笔记：一本书一条记录（书名/作者/状态/评分/起止日期），notes 是挂在某本书下面的
       // 一条条读书笔记/摘录（可选页码）。两个都是后加的顶层字段，不进 isValidDataShape 的 required。
@@ -126,6 +139,13 @@
     { code: "pt", label: "葡萄牙语" },
     { code: "it", label: "意大利语" },
   ];
+  // 多语言互译可选的三家翻译服务，settings.js 的选择器和 classNotes.js 都会用到这份列表，
+  // 集中定义一处，不在两个模块里各写一遍容易写岔。
+  const TRANSLATION_PROVIDER_OPTIONS = [
+    { code: "google", label: "Google 翻译" },
+    { code: "azure", label: "Azure Translator" },
+    { code: "deepl", label: "DeepL" },
+  ];
 
   /**
    * 把老存档里的 settings 和 defaultState() 里新增的 settings 子字段做一次"深合并"。
@@ -142,6 +162,10 @@
       ...incoming,
       homeCards: { ...base.homeCards, ...(incoming.homeCards || {}) },
       profile: { ...base.profile, ...(incoming.profile || {}) },
+      // 字段迁移：早期版本里"翻译"和"整理笔记"共用一把密钥，存在 translationApiKey 里；
+      // 现在整理笔记单独用 claudeApiKey。老存档如果只有 translationApiKey、还没有
+      // claudeApiKey，就把老密钥接过来，用户不用重新填一遍。
+      claudeApiKey: incoming.claudeApiKey || incoming.translationApiKey || "",
     };
   }
 
@@ -1382,9 +1406,32 @@
       setTheme(state.settings.theme === "day" ? "night" : "day");
       return state.settings.theme;
     }
-    /** 翻译服务密钥：纯本地存储，传什么存什么（去掉首尾空格），传空字符串等于清空。 */
-    function setTranslationApiKey(key) {
-      state.settings.translationApiKey = typeof key === "string" ? key.trim() : "";
+    /** Claude API 密钥（整理笔记用）：纯本地存储，传什么存什么（去掉首尾空格），传空字符串等于清空。 */
+    function setClaudeApiKey(key) {
+      state.settings.claudeApiKey = typeof key === "string" ? key.trim() : "";
+      persist();
+    }
+    /** 当前生效的翻译服务：google/azure/deepl 三选一，非法值直接忽略（不写入、不报错）。 */
+    function setTranslationProvider(provider) {
+      if (!TRANSLATION_PROVIDER_OPTIONS.some((p) => p.code === provider)) return;
+      state.settings.translationProvider = provider;
+      persist();
+    }
+    function setGoogleTranslateApiKey(key) {
+      state.settings.googleTranslateApiKey = typeof key === "string" ? key.trim() : "";
+      persist();
+    }
+    function setAzureTranslatorApiKey(key) {
+      state.settings.azureTranslatorApiKey = typeof key === "string" ? key.trim() : "";
+      persist();
+    }
+    /** Azure 验证请求除了密钥还要求带上"资源区域"（创建资源时选的那个区域，比如 eastasia）。 */
+    function setAzureTranslatorRegion(region) {
+      state.settings.azureTranslatorRegion = typeof region === "string" ? region.trim() : "";
+      persist();
+    }
+    function setDeeplApiKey(key) {
+      state.settings.deeplApiKey = typeof key === "string" ? key.trim() : "";
       persist();
     }
     /** 更新个人资料（昵称/头像），patch 里只传要改的字段就行，另一个字段保持不变。 */
@@ -1459,8 +1506,11 @@
       addClassNote, findClassNote, appendClassNoteTranscript, finishClassNoteRecording,
       setClassNoteTranslation, setClassNoteMarkdown, renameClassNote, removeClassNote, listClassNotes,
       getSettings, updateHomeCardVisibility, setLastBackupAt, manualSave,
-      setFontScale, setTheme, toggleTheme, setTranslationApiKey, updateProfile,
+      setFontScale, setTheme, toggleTheme, updateProfile,
+      setClaudeApiKey, setTranslationProvider,
+      setGoogleTranslateApiKey, setAzureTranslatorApiKey, setAzureTranslatorRegion, setDeeplApiKey,
       FONT_SCALES, THEMES, AVATAR_OPTIONS, BOOK_STATUSES, CLASS_NOTE_LANGUAGES,
+      TRANSLATION_PROVIDER_OPTIONS,
       exportBackup, importBackup, resetAll,
     };
   }
@@ -1478,5 +1528,6 @@
   return {
     STORAGE_KEY, SCHEMA_VERSION, createStore, store,
     FONT_SCALES, THEMES, AVATAR_OPTIONS, APP_NAME, BOOK_STATUSES, CLASS_NOTE_LANGUAGES,
+    TRANSLATION_PROVIDER_OPTIONS,
   };
 });
