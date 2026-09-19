@@ -1444,6 +1444,26 @@ describe("课堂笔记：录音+转录+翻译+AI整理笔记的数据层", () =>
     assert.equal(updated.notesMarkdown, "# 课程结构\n- 三个模块");
   });
 
+  test("笔记正文可以再翻译成其它语言，跟原文/其它语言互不影响", () => {
+    const note = store.addClassNote({ title: "课5" });
+    store.setClassNoteMarkdown(note.id, "# 标题\n正文");
+    const beforeUpdatedAt = store.findClassNote(note.id).updatedAt;
+
+    const updated = store.setClassNoteNotesTranslation(note.id, "en", "# Title\nBody");
+    assert.equal(updated.notesTranslations.en, "# Title\nBody");
+    assert.equal(updated.notesMarkdown, "# 标题\n正文"); // 原文不受影响
+    assert.ok(updated.updatedAt >= beforeUpdatedAt);
+
+    store.setClassNoteNotesTranslation(note.id, "zh", "# 中文标题\n中文正文");
+    const found = store.findClassNote(note.id);
+    assert.equal(found.notesTranslations.en, "# Title\nBody"); // 另一种语言不受影响
+    assert.equal(found.notesTranslations.zh, "# 中文标题\n中文正文");
+
+    // 整段替换，不是追加。
+    store.setClassNoteNotesTranslation(note.id, "en", "# New Title");
+    assert.equal(store.findClassNote(note.id).notesTranslations.en, "# New Title");
+  });
+
   test("重命名和删除", () => {
     const note = store.addClassNote({ title: "原标题" });
     store.renameClassNote(note.id, "新标题");
@@ -1466,6 +1486,7 @@ describe("课堂笔记：录音+转录+翻译+AI整理笔记的数据层", () =>
     assert.equal(store.setClassNoteTranslation("no-such-id", "zh", []), null);
     assert.equal(store.appendClassNoteTranslation("no-such-id", "zh", []), null);
     assert.equal(store.setClassNoteMarkdown("no-such-id", "x"), null);
+    assert.equal(store.setClassNoteNotesTranslation("no-such-id", "zh", "x"), null);
     assert.equal(store.renameClassNote("no-such-id", "x"), null);
   });
 

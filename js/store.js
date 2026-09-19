@@ -1282,8 +1282,11 @@
         // 翻译结果按目标语言代码分开存：{ en: [{start,end,text}], zh: [...] }。
         // 没有生成过翻译的语言不会出现在这个对象里。
         translations: {},
-        // AI 整理出的结构化笔记（Markdown 文本），没生成过是空字符串。
+        // AI 整理出的结构化笔记（Markdown 文本，语言等于 sourceLang），没生成过是空字符串。
         notesMarkdown: "",
+        // 笔记正文翻译成其它语言的结果，按语言代码分开存：{ en: "markdown...", zh: "..." }；
+        // 没翻译过的语言不会出现在这个对象里，跟 translations（转录的翻译）是同一个模式。
+        notesTranslations: {},
         // 录音时长（秒）和音频在 IndexedDB 里的引用 key；没有录完/还没存音频时为 null。
         audioDurationSeconds: 0,
         audioKey: null,
@@ -1367,6 +1370,19 @@
       if (!note) return null;
       note.notesMarkdown = typeof markdown === "string" ? markdown : "";
       note.status = "notes_ready";
+      touchClassNote(note);
+      persist();
+      return note;
+    }
+
+    /**
+     * 保存笔记正文翻译成某个目标语言的结果（整段替换，笔记正文本来就不长，不需要像
+     * appendClassNoteTranslation 那样做"只追加新内容"的性能优化）。
+     */
+    function setClassNoteNotesTranslation(id, lang, markdown) {
+      const note = findClassNote(id);
+      if (!note) return null;
+      note.notesTranslations = { ...(note.notesTranslations || {}), [lang]: typeof markdown === "string" ? markdown : "" };
       touchClassNote(note);
       persist();
       return note;
@@ -1523,7 +1539,8 @@
       addBook, updateBook, removeBook, listBooks, findBook,
       addBookNote, removeBookNote, listBookNotes, countBookNotes, listBooksFinishedSeries,
       addClassNote, findClassNote, appendClassNoteTranscript, finishClassNoteRecording,
-      setClassNoteTranslation, appendClassNoteTranslation, setClassNoteMarkdown, renameClassNote, removeClassNote, listClassNotes,
+      setClassNoteTranslation, appendClassNoteTranslation, setClassNoteMarkdown, setClassNoteNotesTranslation,
+      renameClassNote, removeClassNote, listClassNotes,
       getSettings, updateHomeCardVisibility, setLastBackupAt, manualSave,
       setFontScale, setTheme, toggleTheme, updateProfile,
       setClaudeApiKey, setTranslationProvider,

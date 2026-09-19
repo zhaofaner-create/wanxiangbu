@@ -43,6 +43,8 @@
   let view = { mode: "list" }; // {mode:"list"} | {mode:"record", noteId:string} | {mode:"detail", noteId:string}
   let detailTab = "notes"; // "notes" | "transcript"（"转录" tab 现在原文+译文一起显示，不再单独分"翻译" tab）
   let activeTranslationLang = null;
+  const NOTES_SOURCE_KEY = "__source__"; // "笔记"tab 语言切换里代表"原文"（sourceLang）的那个选项，不是真的语言代码
+  let activeNotesLang = NOTES_SOURCE_KEY; // "笔记"tab 当前查看的是原文还是翻译成了哪个目标语言
   let recorder = null; // 当前活跃的 speechRecorder 实例；非空表示正在录音（含暂停）
   let recordingNoteId = null; // recorder 对应的笔记 id
   let recordStartError = null; // 启动失败（不支持/没权限）时的提示
@@ -413,6 +415,7 @@
     view = { mode: "detail", noteId: note.id };
     detailTab = "transcript";
     activeTranslationLang = note.targetLangs[0] || null;
+    activeNotesLang = NOTES_SOURCE_KEY;
     rerender();
   }
 
@@ -735,47 +738,139 @@
       return h("div", {}, [langSeg ? langSeg.el : null, bodySlot]);
     }
 
+    // ---------- 笔记 tab：原文（AI 整理出来的 Markdown）+ 可以再翻译成其它语言。
+    // "整理笔记"本身只用 Claude、只会生成一份 sourceLang 语言的笔记；"把笔记翻译成
+    // 别的语言"是另一步，复用跟转录一样的翻译服务（Google/Azure/DeepL 当前选中的那家），
+    // 直接把整份 Markdown 文本当一段文本传过去翻译，格式标记（标题号、列表、表格）
+    // 是普通字符，多数情况下译文里能原样保留，不需要额外处理。 ----------
     function renderNotesTab() {
-      const statusEl = h(
-        "div", { class: "muted", style: "font-size:12px;margin:6px 0 10px;" },
-        hasClaudeKey ? "" : "还没设置 AI 服务密钥，去「数据与设置」填一个才能用这个功能"
-      );
-
-      async function generateNotes() {
-        genBtn.disabled = true;
-        const prevLabel = genBtn.textContent;
-        genBtn.textContent = "整理中…";
-        statusEl.textContent = "AI 正在整理笔记，可能需要几秒到十几秒…";
-        try {
-          const text = await aiClient.callClaude({
-            apiKey: store.getSettings().claudeApiKey,
-            system: "你是一个帮学生整理课堂笔记的助手，只输出笔记正文本身，不要输出任何多余的解释。",
-            prompt: aiClient.buildNotesPrompt(note.transcriptSegments, note.sourceLang),
-          });
-          store.setClassNoteMarkdown(note.id, text);
-          rerender();
-        } catch (err) {
-          genBtn.disabled = false;
-          genBtn.textContent = prevLabel;
-          statusEl.textContent = err.message || "生成笔记失败";
-        }
+      const langOptions = [
+        { key: NOTES_SOURCE_KEY, label: "原文" },
+        ...note.targetLangs.map((code) => ({ key: code, label: langLabel(store, code) })),
+      ];
+      if (!langOptions.some((o) => o.key === activeNotesLang)) {
+        activeNotesLang = NOTES_SOURCE_KEY;
       }
 
-      const genBtn = h(
-        "button",
-        {
-          class: "btn btn-primary", type: "button",
-          disabled: !hasClaudeKey || !note.transcriptSegments.length || undefined,
-          onClick: generateNotes,
-        },
-        note.notesMarkdown ? "重新整理笔记" : "生成笔记"
-      );
+      const bodySlot = h("div", { style: "margin-top:12px;" });
+      function refreshBody() {
+        mount(bodySlot, buildBody());
+      }
 
-      return h("div", {}, [
-        h("div", { class: "section-row", style: "justify-content:flex-end;" }, [genBtn]),
-        statusEl,
-        renderMarkdown(note.notesMarkdown),
-      ]);
+      function buildSourceBody() {
+        const statusEl = h(
+          "div", { class: "muted", style: "font-size:12px;margin:6px 0 10px;" },
+          hasClaudeKey ? "" : "还没设置 AI 服务密钥，去「数据与设置」填一个才能用这个功能"
+        );
+
+        async function generateNotes() {
+          genBtn.disabled = true;
+          const prevLabel = genBtn.textContent;
+          genBtn.textContent = "整理中…";
+          statusEl.textContent = "AI 正在整理笔记，可能需要几秒到十几秒…";
+          try {
+            const text = await aiClient.callClaude({
+              apiKey: store.getSettings().claudeApiKey,
+              system: "你是一个帮学生整理课堂笔记的助手，只输出笔记正文本身，不要输出任何多余的解释。",
+              prompt: aiClient.buildNotesPrompt(note.transcriptSegments, note.sourceLang),
+            });
+            store.setClassNoteMarkdown(note.id, text);
+            rerender();
+          } catch (err) {
+            genBtn.disabled = false;
+            genBtn.textContent = prevLabel;
+            statusEl.textContent = err.message || "生成笔记失败";
+          }
+        }
+
+        const genBtn = h(
+          "button",
+          {
+            class: "btn btn-primary", type: "button",
+            disabled: !hasClaudeKey || !note.transcriptSegments.length || undefined,
+            onClick: generateNotes,
+          },
+          note.notesMarkdown ? "重新整理笔记" : "生成笔记"
+        );
+
+        return h("div", {}, [
+          h("div", { class: "section-row", style: "justify-content:flex-end;" }, [genBtn]),
+          statusEl,
+          renderMarkdown(note.notesMarkdown),
+        ]);
+      }
+
+      function buildTranslatedBody(lang) {
+        const notesTranslations = note.notesTranslations || {};
+        const translatedMarkdown = notesTranslations[lang] || "";
+        const currentProvider = store.getSettings().translationProvider;
+        const statusEl = h(
+          "div", { class: "muted", style: "font-size:12px;margin:6px 0 10px;" },
+          !note.notesMarkdown
+            ? "先在「原文」里生成笔记，才能翻译成其它语言"
+            : hasTranslationKey
+              ? ""
+              : `还没配置当前使用的翻译服务（${providerLabel(store, currentProvider)}），去「数据与设置」的「多语言互译服务」里填一个才能翻译`
+        );
+
+        async function translateNotesNow() {
+          transBtn.disabled = true;
+          const prevLabel = transBtn.textContent;
+          transBtn.textContent = "翻译中…";
+          statusEl.textContent = `${providerLabel(store, currentProvider)}正在翻译笔记，可能需要几秒…`;
+          try {
+            const settings = store.getSettings();
+            const [translatedText] = await translationProviders.translateTexts({
+              provider: settings.translationProvider,
+              texts: [note.notesMarkdown],
+              targetLangCode: lang,
+              keys: translationKeysFromSettings(settings),
+            });
+            store.setClassNoteNotesTranslation(note.id, lang, translatedText || "");
+            rerender();
+          } catch (err) {
+            transBtn.disabled = false;
+            transBtn.textContent = prevLabel;
+            statusEl.textContent = err.message || "翻译笔记失败";
+          }
+        }
+
+        const transBtn = h(
+          "button",
+          {
+            class: "btn btn-outline btn-sm", type: "button",
+            disabled: !hasTranslationKey || !note.notesMarkdown || undefined,
+            onClick: translateNotesNow,
+          },
+          translatedMarkdown ? `重新翻译成${langLabel(store, lang)}` : `翻译成${langLabel(store, lang)}`
+        );
+
+        return h("div", {}, [
+          h("div", { class: "section-row", style: "justify-content:flex-end;" }, [transBtn]),
+          statusEl,
+          translatedMarkdown
+            ? renderMarkdown(translatedMarkdown)
+            : h("div", { class: "empty-hint" }, "还没有翻译"),
+        ]);
+      }
+
+      function buildBody() {
+        return activeNotesLang === NOTES_SOURCE_KEY ? buildSourceBody() : buildTranslatedBody(activeNotesLang);
+      }
+
+      const langSeg = langOptions.length > 1
+        ? createSegmented({
+            kind: "pill",
+            options: langOptions,
+            activeKey: activeNotesLang,
+            onSelect: (key) => {
+              activeNotesLang = key;
+              refreshBody();
+            },
+          })
+        : null;
+      refreshBody();
+      return h("div", {}, [langSeg ? langSeg.el : null, bodySlot]);
     }
 
     const contentSlot = h("div", { style: "margin-top:14px;" });
@@ -886,6 +981,7 @@
             view = { mode: "detail", noteId: note.id };
             detailTab = "notes";
             activeTranslationLang = note.targetLangs[0] || null;
+            activeNotesLang = NOTES_SOURCE_KEY;
             rerender();
           },
         },

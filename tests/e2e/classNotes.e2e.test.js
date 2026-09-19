@@ -348,6 +348,58 @@ describe("课堂笔记：AI 整理笔记", () => {
   });
 });
 
+describe("课堂笔记：AI 整理出的笔记正文也能再翻译成其它语言", () => {
+  test("没有目标互译语言时，笔记 tab 不出现语言切换胶囊", async () => {
+    await setApiKey(page, "sk-test-key");
+    await startNewRecording(page, { title: "没选互译语言的笔记" });
+    await page.evaluate(() => window.__emitTranscript("一句话", true));
+    await page.locator("button", { hasText: "结束录音" }).click();
+    await mockClaudeApi(page, "# 笔记标题\n正文");
+    await page.locator(".tabs .tab-btn", { hasText: "笔记" }).click();
+    await page.locator("button", { hasText: "生成笔记" }).click();
+    await assert.doesNotReject(page.locator(".note-markdown", { hasText: "笔记标题" }).waitFor());
+    assert.equal(await page.locator(".content-area .pill-group").count(), 0);
+  });
+
+  test("还没生成原文笔记时，切到目标语言看到提示、翻译按钮禁用", async () => {
+    await setApiKey(page, "sk-test-key");
+    await startNewRecording(page, { title: "还没生成笔记", targetLangLabel: "中文" });
+    await page.evaluate(() => window.__emitTranscript("一句话", true));
+    await page.locator("button", { hasText: "结束录音" }).click();
+    await page.locator(".tabs .tab-btn", { hasText: "笔记" }).click();
+    await page.locator(".content-area .pill-group .pill", { hasText: "中文" }).click();
+    await assert.doesNotReject(page.locator(".content-area", { hasText: "先在「原文」里生成笔记" }).waitFor());
+    assert.equal(await page.locator("button", { hasText: "翻译成中文" }).isDisabled(), true);
+  });
+
+  test("生成原文笔记后，可以把笔记翻译成目标语言，原文和译文互不覆盖", async () => {
+    await setApiKey(page, "sk-test-key");
+    await setTranslationProvider(page, "google", { apiKey: "google-test-key" });
+    await startNewRecording(page, { title: "笔记多语言测试", targetLangLabel: "中文" });
+    await page.evaluate(() => window.__emitTranscript("一句话", true));
+    await page.locator("button", { hasText: "结束录音" }).click();
+
+    await mockClaudeApi(page, "# 课堂要点\n- 第一点");
+    await page.locator(".tabs .tab-btn", { hasText: "笔记" }).click();
+    await page.locator("button", { hasText: "生成笔记" }).click();
+    await assert.doesNotReject(page.locator(".note-markdown", { hasText: "课堂要点" }).waitFor());
+
+    await mockTranslateApi(page, "google", "# 课堂要点\n- 第一点（中文）");
+    await page.locator(".content-area .pill-group .pill", { hasText: "中文" }).click();
+    await page.locator("button", { hasText: "翻译成中文" }).click();
+    await assert.doesNotReject(page.locator(".note-markdown", { hasText: "第一点（中文）" }).waitFor());
+
+    // 切回原文，原文没有被译文覆盖。
+    await page.locator(".content-area .pill-group .pill", { hasText: "原文" }).click();
+    await assert.doesNotReject(page.locator(".note-markdown", { hasText: "课堂要点" }).waitFor());
+    assert.doesNotMatch(await page.locator(".note-markdown").innerText(), /中文/);
+
+    // 再切回中文，之前翻译好的内容还在（不用重新翻译），按钮文字变成"重新翻译"。
+    await page.locator(".content-area .pill-group .pill", { hasText: "中文" }).click();
+    await assert.doesNotReject(page.locator("button", { hasText: "重新翻译成中文" }).waitFor());
+  });
+});
+
 describe("课堂笔记：多语言互译（转录 tab 里原文+译文合并显示，不再单独分翻译 tab）", () => {
   test("没有配置当前使用的翻译服务时，翻译按钮禁用并提示去设置", async () => {
     await startNewRecording(page, { title: "没配置翻译服务的笔记", targetLangLabel: "中文" });
