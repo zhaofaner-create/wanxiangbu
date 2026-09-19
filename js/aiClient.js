@@ -42,11 +42,30 @@
     return err;
   }
 
+  /** 把纯文字 prompt 和（可选的）图片列表拼成 Messages API 的 content 字段。没有图片时
+   * 直接用原来的纯字符串形式（保持跟以前完全一样，不给现有调用方增加负担）；有图片时
+   * 拼成"图片在前、文字在后"的内容块数组——图片块用 Anthropic 原生的
+   * {type:"image", source:{type:"base64", media_type, data}} 格式，这样 Claude 能直接用
+   * 视觉能力读懂拍照笔记/板书照片的内容，不需要我们自己先做一遍 OCR。
+   * images: [{ base64Data, mediaType }]，base64Data 不带 "data:image/...;base64," 前缀。 */
+  function buildMessageContent(prompt, images) {
+    const imageList = Array.isArray(images) ? images.filter((img) => img && img.base64Data) : [];
+    if (imageList.length === 0) return prompt;
+    return [
+      ...imageList.map((img) => ({
+        type: "image",
+        source: { type: "base64", media_type: img.mediaType || "image/jpeg", data: img.base64Data },
+      })),
+      { type: "text", text: prompt },
+    ];
+  }
+
   /**
    * 调用 Claude API，返回模型输出的纯文字。
    * fetchImpl 是为了方便测试注入假的 fetch；不传的话用运行环境的全局 fetch。
+   * images 可选：需要让模型"看图"时传（比如拍照笔记材料），见 buildMessageContent。
    */
-  async function callClaude({ apiKey, system, prompt, model, maxTokens, fetchImpl } = {}) {
+  async function callClaude({ apiKey, system, prompt, images, model, maxTokens, fetchImpl } = {}) {
     const key = (apiKey || "").trim();
     if (!key) {
       throw aiClientError("还没有设置 AI 服务密钥，请先去「数据与设置」填一个", "no_key");
@@ -70,7 +89,7 @@
           model: model || DEFAULT_MODEL,
           max_tokens: maxTokens || MAX_TOKENS,
           system,
-          messages: [{ role: "user", content: prompt }],
+          messages: [{ role: "user", content: buildMessageContent(prompt, images) }],
         }),
       });
     } catch {
@@ -170,15 +189,32 @@
     }));
   }
 
-  /** 构造"把整段转录整理成结构化 Markdown 笔记"的提示词。 */
-  function buildNotesPrompt(segments, noteLangCode) {
+  /** 构造"把整段转录整理成结构化 Markdown 笔记"的提示词。materialsText 可选：老师上传的
+   * PPT 课件文字（已在客户端解析成纯文本）；拍照材料本身以图片形式通过 callClaude 的
+   * images 参数单独传给模型，这里只在提示词里提一句"还有图片可以看"，不需要把图片内容
+   * 转成文字塞进这段 prompt。 */
+  function buildNotesPrompt(segments, noteLangCode, materialsText) {
     const langName = languageName(noteLangCode);
+    const trimmedMaterials = (materialsText || "").trim();
+    const materialsBlock = trimmedMaterials
+      ? [
+          "",
+          "除了录音转录，老师还提供了以下课件材料，请结合这些材料一起整理笔记（如果材料和",
+          "录音内容有重复，以更准确、更完整的一方为准；如果附带了图片，也请一并参考图片里的内容）：",
+          "",
+          "【课件材料】",
+          trimmedMaterials,
+          "",
+        ].join("\n")
+      : "";
     return [
       `下面是一段课堂录音的完整转录文字。请用${langName}把它整理成一份结构化的课堂笔记，`,
       "用 Markdown 格式：合理拆分小标题（用##）、要点用无序列表、有对照关系的内容用表格，",
       "保留重要的原文引用（可以用引用块），不要逐句翻译或复述，重点是提炼结构和要点。",
       "只输出笔记正文本身，不要输出额外的解释或\"好的，这是笔记\"这类前后缀：",
+      materialsBlock,
       "",
+      "【课堂转录】",
       formatSegmentsForPrompt(segments),
     ].join("\n");
   }
@@ -284,13 +320,67 @@
     ].join("\n");
   }
 
+  // ---------- 思维导图：跟闪卡/测验一样基于 notesMarkdown 生成，输出是一个嵌套的
+  // {title, children:[...]} 树形 JSON（对象而不是数组），所以需要一个跟 extractJsonArray
+  // 对应的、按大括号取整个 JSON 对象的辅助函数。 ----------
+
+  /** 从模型回复里找出第一个完整的 JSON 对象并解析；找不到、解析失败、或解析出来的不是
+   * 对象（比如变成了数组）都返回 null，不抛错，处理方式跟 extractJsonArray 一致。 */
+  function extractJsonObject(text) {
+    const raw = text || "";
+    const start = raw.indexOf("{");
+    const end = raw.lastIndexOf("}");
+    if (start === -1 || end === -1 || end < start) return null;
+    try {
+      const parsed = JSON.parse(raw.slice(start, end + 1));
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** 构造"根据整理好的笔记正文生成思维导图"的提示词，要求输出嵌套树形 JSON。 */
+  function buildMindMapPrompt(notesMarkdown, langCode) {
+    const langName = languageName(langCode);
+    return [
+      `下面是一份${langName}课堂笔记。请把笔记内容整理成一张思维导图，用嵌套的树形结构`,
+      "表示各级要点之间的层级关系：根节点是这份笔记的主题，往下每一级是更细的分支或要点。",
+      `节点标题用${langName}，尽量精炼（几个字到一小句话，不要整段照抄原文）。`,
+      "层级最多4层，每个节点下的子节点数量不要超过8个，避免图形过于复杂难以阅读。",
+      '严格只输出一个 JSON 对象，格式为 {"title":"根节点标题","children":[{"title":"分支标题","children":[...]}]}，',
+      "叶子节点的 children 是空数组 []，不要输出任何解释、前后缀文字或 Markdown 代码块标记：",
+      "",
+      notesMarkdown,
+    ].join("\n");
+  }
+
+  /** 递归校验/清洗一个思维导图节点：title 必须是非空字符串，children 递归清洗、丢弃
+   * 不合格的子节点；depth 防止（理论上不会出现的）异常深层结构把渲染卡死。整个节点
+   * title 为空就返回 null，让调用方（parseMindMapResponse）能识别"这份回复不能用"。 */
+  function sanitizeMindMapNode(node, depth) {
+    if (!node || typeof node !== "object" || depth > 6) return null;
+    const title = typeof node.title === "string" ? node.title.trim() : "";
+    if (!title) return null;
+    const childrenRaw = Array.isArray(node.children) ? node.children : [];
+    const children = childrenRaw.map((c) => sanitizeMindMapNode(c, depth + 1)).filter(Boolean);
+    return { title, children };
+  }
+
+  /** 把 buildMindMapPrompt 对应的模型回复解析成 {title, children:[...]} 树；解析失败或
+   * 根节点本身不合格都返回 null，调用方按"生成失败，请重试"处理。 */
+  function parseMindMapResponse(responseText) {
+    const obj = extractJsonObject(responseText);
+    return sanitizeMindMapNode(obj, 0);
+  }
+
   return {
-    callClaude, extractText, aiClientError,
+    callClaude, extractText, aiClientError, buildMessageContent,
     languageName, formatSeconds, formatSegmentsForPrompt,
     buildTranslatePrompt, parseTranslateResponse, buildNotesPrompt,
     buildFlashcardsPrompt, parseFlashcardsResponse,
     buildQuizPrompt, parseQuizResponse,
     buildQaPrompt,
+    buildMindMapPrompt, parseMindMapResponse, extractJsonObject,
     DEFAULT_MODEL,
   };
 });

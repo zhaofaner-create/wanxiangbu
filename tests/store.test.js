@@ -1376,6 +1376,8 @@ describe("课堂笔记：录音+转录+翻译+AI整理笔记的数据层", () =>
     assert.deepEqual(note.translations, {});
     assert.equal(note.notesMarkdown, "");
     assert.equal(note.audioKey, null);
+    assert.deepEqual(note.materials, []);
+    assert.equal(note.mindMap, null);
   });
 
   test("追加转录分段：空文字不追加，正常文字追加后 updatedAt 会更新", async () => {
@@ -1521,6 +1523,52 @@ describe("课堂笔记：录音+转录+翻译+AI整理笔记的数据层", () =>
     ]);
   });
 
+  test("上传材料：添加会自动生成 id/addedAt，图片和 PPT 两种 kind 都能存", () => {
+    const note = store.addClassNote({ title: "材料课" });
+    const img = store.addClassNoteMaterial(note.id, { kind: "image", name: "板书1.jpg", storageKey: "mat-key-1" });
+    assert.ok(img.id);
+    assert.equal(img.kind, "image");
+    assert.equal(img.name, "板书1.jpg");
+    assert.equal(img.storageKey, "mat-key-1");
+    assert.equal(img.extractedText, "");
+
+    const ppt = store.addClassNoteMaterial(note.id, { kind: "pptx", name: "第3讲.pptx", extractedText: "【第 1 页】\n标题" });
+    assert.equal(ppt.kind, "pptx");
+    assert.equal(ppt.extractedText, "【第 1 页】\n标题");
+    assert.equal(ppt.storageKey, null);
+
+    const found = store.findClassNote(note.id);
+    assert.equal(found.materials.length, 2);
+
+    // 不认识的 kind 一律当成 image 处理（防御性默认值，不会因为传参笔误就存出一条脏数据）。
+    const fallback = store.addClassNoteMaterial(note.id, { name: "未知类型" });
+    assert.equal(fallback.kind, "image");
+  });
+
+  test("上传材料：按 id 删除，不影响其它材料", () => {
+    const note = store.addClassNote({ title: "材料课2" });
+    const a = store.addClassNoteMaterial(note.id, { kind: "image", name: "a.jpg", storageKey: "k1" });
+    const b = store.addClassNoteMaterial(note.id, { kind: "image", name: "b.jpg", storageKey: "k2" });
+    store.removeClassNoteMaterial(note.id, a.id);
+    const found = store.findClassNote(note.id);
+    assert.equal(found.materials.length, 1);
+    assert.equal(found.materials[0].id, b.id);
+  });
+
+  test("保存/覆盖思维导图：整段替换，非法值归一化成 null", () => {
+    const note = store.addClassNote({ title: "导图课" });
+    const tree = { title: "根节点", children: [{ title: "分支1", children: [] }] };
+    const updated = store.setClassNoteMindMap(note.id, tree);
+    assert.deepEqual(updated.mindMap, tree);
+
+    const tree2 = { title: "新的根节点", children: [] };
+    store.setClassNoteMindMap(note.id, tree2);
+    assert.deepEqual(store.findClassNote(note.id).mindMap, tree2);
+
+    store.setClassNoteMindMap(note.id, "不是对象");
+    assert.equal(store.findClassNote(note.id).mindMap, null);
+  });
+
   test("重命名和删除", () => {
     const note = store.addClassNote({ title: "原标题" });
     store.renameClassNote(note.id, "新标题");
@@ -1549,6 +1597,9 @@ describe("课堂笔记：录音+转录+翻译+AI整理笔记的数据层", () =>
     assert.equal(store.setClassNoteQuizAnswer("no-such-id", 0, 0), null);
     assert.equal(store.addClassNoteQaMessage("no-such-id", "user", "x"), null);
     assert.equal(store.renameClassNote("no-such-id", "x"), null);
+    assert.equal(store.addClassNoteMaterial("no-such-id", { kind: "image" }), null);
+    assert.equal(store.removeClassNoteMaterial("no-such-id", "m1"), null);
+    assert.equal(store.setClassNoteMindMap("no-such-id", { title: "x", children: [] }), null);
   });
 
   test("老存档（没有 classNotes 字段）能正常兼容补上空数组", () => {

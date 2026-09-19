@@ -1297,6 +1297,15 @@
         // 录音时长（秒）和音频在 IndexedDB 里的引用 key；没有录完/还没存音频时为 null。
         audioDurationSeconds: 0,
         audioKey: null,
+        // 上传的课件/拍照材料：[{id, kind:"image"|"pptx", name, addedAt, storageKey?, extractedText?}]。
+        // 图片（kind:"image"）体积大，正文不存在这里——真正的 Blob 存在 IndexedDB，
+        // storageKey 是指向 IndexedDB 里那条记录的 key（跟 audioKey 是同一种"指针"模式）。
+        // PPT（kind:"pptx"）文件本身不保留，只保留客户端解析出来的 extractedText 纯文本。
+        // 注意：这是后加的字段，不进 isValidDataShape 的 required 列表。
+        materials: [],
+        // AI 根据笔记正文（和材料）生成的思维导图，结构是 {title, children:[...]} 的嵌套树，
+        // 没生成过是 null。同样是后加字段，不进 isValidDataShape 的 required。
+        mindMap: null,
         status: "recording", // recording | recorded | notes_ready
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
@@ -1437,6 +1446,46 @@
       const trimmed = typeof text === "string" ? text.trim() : "";
       if (!trimmed) return note;
       note.qaMessages = [...(note.qaMessages || []), { role, text: trimmed }];
+      touchClassNote(note);
+      persist();
+      return note;
+    }
+
+    /** 给这条笔记添加一份上传的材料（图片或解析好的 PPT 文本）。material 需要带 kind，
+     * id 由这里自动生成（跟录音的音频、笔记本身用同一个 uuid()）。返回新增的这条 material。 */
+    function addClassNoteMaterial(id, material) {
+      const note = findClassNote(id);
+      if (!note) return null;
+      const item = {
+        id: uuid(),
+        kind: material && material.kind === "pptx" ? "pptx" : "image",
+        name: (material && material.name) || "",
+        addedAt: new Date().toISOString(),
+        storageKey: (material && material.storageKey) || null,
+        extractedText: (material && typeof material.extractedText === "string") ? material.extractedText : "",
+      };
+      note.materials = [...(note.materials || []), item];
+      touchClassNote(note);
+      persist();
+      return item;
+    }
+
+    /** 删除这条笔记里的一份材料（按 materialId）；IndexedDB 里对应的图片 Blob 由调用方
+     * 自己负责删（这里只管 store.js 这边的 localStorage 记录，跟 audioKey 的处理方式一致）。 */
+    function removeClassNoteMaterial(id, materialId) {
+      const note = findClassNote(id);
+      if (!note) return null;
+      note.materials = (note.materials || []).filter((m) => m.id !== materialId);
+      touchClassNote(note);
+      persist();
+      return note;
+    }
+
+    /** 保存 AI 根据笔记正文（和材料）生成的思维导图（整段替换，重新生成会覆盖上一份）。 */
+    function setClassNoteMindMap(id, mindMap) {
+      const note = findClassNote(id);
+      if (!note) return null;
+      note.mindMap = mindMap && typeof mindMap === "object" ? mindMap : null;
       touchClassNote(note);
       persist();
       return note;
@@ -1595,6 +1644,7 @@
       addClassNote, findClassNote, appendClassNoteTranscript, finishClassNoteRecording,
       setClassNoteTranslation, appendClassNoteTranslation, setClassNoteMarkdown, setClassNoteNotesTranslation,
       setClassNoteFlashcards, setClassNoteQuiz, setClassNoteQuizAnswer, addClassNoteQaMessage,
+      addClassNoteMaterial, removeClassNoteMaterial, setClassNoteMindMap,
       renameClassNote, removeClassNote, listClassNotes,
       getSettings, updateHomeCardVisibility, setLastBackupAt, manualSave,
       setFontScale, setTheme, toggleTheme, updateProfile,

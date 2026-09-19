@@ -18,6 +18,9 @@
   const { openFormModal } = require("../components/modal.js");
   const { createSpeechRecorder } = require("../components/speechRecorder.js");
   const { saveAudio, deleteAudio, makeAudioKey } = require("../components/audioStore.js");
+  const { saveMaterialImage, loadMaterialImage, deleteMaterialImage, makeMaterialKey } = require("../components/materialsStore.js");
+  const { extractPptxText } = require("../components/pptxText.js");
+  const { renderMindMapSvg } = require("../components/mindMap.js");
   const { parseMarkdownBlocks, parseInlineSegments } = require("../components/markdown.js");
   const aiClient = require("../aiClient.js");
   const translationProviders = require("../translationProviders.js");
@@ -232,6 +235,59 @@
     return { block, translationEl };
   }
 
+  /** 把 base64 数据从 Blob 里读出来（去掉 "data:image/png;base64," 这个前缀，只留
+   * Anthropic API 要的纯 base64 正文）。 */
+  function blobToBase64(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result || "";
+        const commaIndex = result.indexOf(",");
+        resolve(commaIndex >= 0 ? result.slice(commaIndex + 1) : result);
+      };
+      reader.onerror = () => reject(reader.error || new Error("读取图片失败"));
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  /**
+   * 把一条笔记上传的材料整理成"整理笔记"提示词能用的形状：PPT 已经在上传时解析成了
+   * 纯文本，直接拼进 materialsText；拍照图片这时候才从 IndexedDB 里读出 Blob 转成
+   * base64，作为 images 传给 callClaude，让 Claude 用视觉能力直接读图（不用自己先做
+   * OCR）。单张图片读取失败不影响其它材料和正常生成笔记，直接跳过那一张。
+   */
+  async function collectMaterialsForPrompt(note) {
+    const materials = note.materials || [];
+    const textParts = [];
+    const images = [];
+    for (const m of materials) {
+      if (m.kind === "pptx") {
+        if (m.extractedText) textParts.push(`【PPT：${m.name || "未命名"}】\n${m.extractedText}`);
+      } else if (m.kind === "image" && m.storageKey) {
+        try {
+          const blob = await loadMaterialImage(m.storageKey);
+          if (blob) {
+            const base64Data = await blobToBase64(blob);
+            images.push({ base64Data, mediaType: blob.type || "image/jpeg" });
+          }
+        } catch {
+          // 图片读取失败就跳过，不阻塞整体生成
+        }
+      }
+    }
+    return { materialsText: textParts.join("\n\n"), images };
+  }
+
+  /** 删除一条笔记时，把它上传的图片材料在 IndexedDB 里的 Blob 也一起清掉（PPT 材料只存了
+   * 文字、随 store.js 的笔记记录一起删就行，不用额外处理）。单张删除失败不影响其它张。 */
+  function deleteNoteMaterialImages(note) {
+    (note.materials || []).forEach((m) => {
+      if (m.kind === "image" && m.storageKey) {
+        deleteMaterialImage(m.storageKey).catch(() => {});
+      }
+    });
+  }
+
   // ---------- 新建课堂笔记：标题 + 讲课语言 + 互译语言多选，跟 modal.js 的单表单弹窗
   // 字段类型不够用（要多选），所以跟 readingNotes.js 的 openNotesModal 一样手搭一个。 ----------
 
@@ -239,6 +295,13 @@
     let overlay;
     let sourceLang = "fr";
     const targetSet = new Set();
+    // 录音还没开始、笔记还没建出来，这时候选的材料先留在内存里：图片留着原始 File
+    // （等笔记有 id 了才批量存进 IndexedDB），PPT 不依赖笔记 id、可以立刻在客户端解析
+    // 成文字直接存文字。跟"笔记详情页随时上传"（renderMaterialsCard）是同一套逻辑，
+    // 只是这里推迟到点"开始录音"那一刻才真正落盘。
+    let pendingMaterials = []; // [{kind:"image", name, file} | {kind:"pptx", name, extractedText}]
+    let materialsBusy = false;
+    let materialsStatus = "";
 
     function box() {
       const titleInput = h("input", { class: "field-input", type: "text", placeholder: "标题（选填，比如“经济学导论 第3讲”）" });
@@ -269,12 +332,80 @@
         ])
       );
 
+      const photoInput = h("input", { type: "file", accept: "image/*", multiple: true, style: "display:none;" });
+      const pptxInput = h("input", {
+        type: "file",
+        accept: ".pptx,application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        style: "display:none;",
+      });
+
+      photoInput.addEventListener("change", () => {
+        const files = Array.from(photoInput.files || []);
+        photoInput.value = "";
+        if (!files.length) return;
+        files.forEach((file) => pendingMaterials.push({ kind: "image", name: file.name, file }));
+        rerenderBox(titleInput.value);
+      });
+
+      pptxInput.addEventListener("change", async () => {
+        const files = Array.from(pptxInput.files || []);
+        pptxInput.value = "";
+        if (!files.length) return;
+        const keepTitle = titleInput.value;
+        materialsBusy = true;
+        for (const file of files) {
+          materialsStatus = `正在解析 PPT「${file.name}」…`;
+          rerenderBox(keepTitle);
+          try {
+            const buffer = await file.arrayBuffer();
+            const extractedText = await extractPptxText(buffer);
+            pendingMaterials.push({ kind: "pptx", name: file.name, extractedText });
+            materialsStatus = "";
+          } catch (err) {
+            materialsStatus = `解析 PPT「${file.name}」失败：${(err && err.message) || "请确认是有效的 .pptx 文件"}`;
+          }
+        }
+        materialsBusy = false;
+        rerenderBox(keepTitle);
+      });
+
+      const materialsListEl = pendingMaterials.length
+        ? h(
+            "div", { style: "display:flex;flex-direction:column;gap:6px;margin-top:6px;" },
+            pendingMaterials.map((m, idx) =>
+              h("div", { class: "list-row", style: "align-items:center;" }, [
+                h("span", { style: "flex:1;font-size:12px;" }, `${m.kind === "pptx" ? "📑" : "🖼️"} ${m.name}`),
+                h(
+                  "span",
+                  {
+                    class: "row-delete",
+                    onClick: () => {
+                      pendingMaterials.splice(idx, 1);
+                      rerenderBox(titleInput.value);
+                    },
+                  },
+                  "删除"
+                ),
+              ])
+            )
+          )
+        : null;
+
       return h("div", {}, [
         h("div", { class: "modal-title" }, "新建课堂笔记"),
         h("label", { class: "field-row" }, [h("span", { class: "field-label" }, "标题"), titleInput]),
         h("label", { class: "field-row" }, [h("span", { class: "field-label" }, "讲课语言"), sourceSelect]),
         h("div", { class: "field-label", style: "margin:10px 0 4px;" }, "需要互译成哪些语言（可多选，可以不选）"),
         h("div", { class: "toggle-grid" }, targetChecks),
+        h("div", { class: "field-label", style: "margin:10px 0 4px;" }, "上传材料（选填，之后也能随时在笔记详情页里补充）"),
+        h("div", { class: "section-row", style: "gap:8px;" }, [
+          h("button", { type: "button", class: "btn btn-outline btn-sm", onClick: () => photoInput.click() }, "+ 上传照片"),
+          h("button", { type: "button", class: "btn btn-outline btn-sm", onClick: () => pptxInput.click() }, "+ 上传 PPT"),
+          photoInput,
+          pptxInput,
+        ]),
+        materialsListEl,
+        materialsStatus ? h("div", { class: "muted", style: "font-size:12px;margin-top:4px;" }, materialsStatus) : null,
         h("div", { class: "modal-actions" }, [
           h("button", { type: "button", class: "btn btn-ghost", onClick: () => overlay.remove() }, "取消"),
           h(
@@ -282,10 +413,27 @@
             {
               type: "button",
               class: "btn btn-primary",
-              onClick: () => {
+              disabled: materialsBusy || undefined,
+              onClick: async (e) => {
                 const title = titleInput.value.trim();
-                overlay.remove();
+                const startBtn = e.currentTarget;
+                startBtn.disabled = true;
+                startBtn.textContent = "创建中…";
                 const note = store.addClassNote({ title, sourceLang, targetLangs: [...targetSet] });
+                for (const m of pendingMaterials) {
+                  try {
+                    if (m.kind === "image") {
+                      const key = makeMaterialKey(note.id);
+                      await saveMaterialImage(key, m.file);
+                      store.addClassNoteMaterial(note.id, { kind: "image", name: m.name, storageKey: key });
+                    } else {
+                      store.addClassNoteMaterial(note.id, { kind: "pptx", name: m.name, extractedText: m.extractedText });
+                    }
+                  } catch {
+                    // 单条材料保存失败不阻塞开始录音，笔记本身已经建好了
+                  }
+                }
+                overlay.remove();
                 onStart(note);
               },
             },
@@ -775,12 +923,16 @@
           genBtn.disabled = true;
           const prevLabel = genBtn.textContent;
           genBtn.textContent = "整理中…";
-          statusEl.textContent = "AI 正在整理笔记，可能需要几秒到十几秒…";
+          statusEl.textContent = (note.materials || []).length
+            ? "AI 正在结合课件材料整理笔记，可能需要几秒到十几秒…"
+            : "AI 正在整理笔记，可能需要几秒到十几秒…";
           try {
+            const { materialsText, images } = await collectMaterialsForPrompt(note);
             const text = await aiClient.callClaude({
               apiKey: store.getSettings().claudeApiKey,
               system: "你是一个帮学生整理课堂笔记的助手，只输出笔记正文本身，不要输出任何多余的解释。",
-              prompt: aiClient.buildNotesPrompt(note.transcriptSegments, note.sourceLang),
+              prompt: aiClient.buildNotesPrompt(note.transcriptSegments, note.sourceLang, materialsText),
+              images,
             });
             store.setClassNoteMarkdown(note.id, text);
             rerender();
@@ -881,8 +1033,113 @@
       return h("div", {}, [langSeg ? langSeg.el : null, bodySlot]);
     }
 
-    // ---------- 闪卡 / 测验 / 提问：都是在"笔记"tab 生成好的 notesMarkdown 基础上
-    // 再让 AI 加工一次，所以三个 tab 都要求先有 notesMarkdown，没有的话只显示提示，
+    // ---------- 课件材料：不属于任何一个 tab，是"笔记"（以及思维导图）生成时会用到的
+    // 共同输入，所以放在 tab 切换栏上面、详情页里始终可见的一张卡片，不管切到哪个 tab
+    // 都能随时补充/删除——对应用户"两个时机都要"（开始录音前 + 之后随时）里"之后随时"
+    // 这一半，"开始录音前"那一半在 openNewNoteModal 里。 ----------
+    function renderMaterialsCard() {
+      const materials = note.materials || [];
+      const statusEl = h("div", { class: "muted", style: "font-size:12px;margin-top:8px;" }, "");
+
+      const photoInput = h("input", { type: "file", accept: "image/*", multiple: true, style: "display:none;" });
+      const pptxInput = h("input", {
+        type: "file",
+        accept: ".pptx,application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        style: "display:none;",
+      });
+
+      function setBusy(busy) {
+        photoBtn.disabled = busy || undefined;
+        pptxBtn.disabled = busy || undefined;
+      }
+
+      // 注意：只有真的成功存进至少一条材料时才 rerender()——rerender() 会把整个详情页
+      // （包括这张材料卡片本身）重新渲染出一份全新的 DOM，这个函数里的 statusEl 也会被
+      // 换成一个全新的、空文字的实例。如果某个文件失败了却仍然 rerender()，刚设置的错误
+      // 提示文字会在浏览器还没来得及画出来之前就被这次 rerender() 冲掉，用户永远看不到。
+      // 全部失败时干脆不 rerender()，让这次 mount 好的 statusEl 就地留着错误提示。
+      photoInput.addEventListener("change", async () => {
+        const files = Array.from(photoInput.files || []);
+        photoInput.value = "";
+        if (!files.length) return;
+        setBusy(true);
+        let anyAdded = false;
+        for (const file of files) {
+          statusEl.textContent = `正在保存照片「${file.name}」…`;
+          try {
+            const key = makeMaterialKey(note.id);
+            await saveMaterialImage(key, file);
+            store.addClassNoteMaterial(note.id, { kind: "image", name: file.name, storageKey: key });
+            anyAdded = true;
+            statusEl.textContent = "";
+          } catch (err) {
+            statusEl.textContent = `保存照片「${file.name}」失败：${(err && err.message) || "未知错误"}`;
+          }
+        }
+        setBusy(false);
+        if (anyAdded) rerender();
+      });
+
+      pptxInput.addEventListener("change", async () => {
+        const files = Array.from(pptxInput.files || []);
+        pptxInput.value = "";
+        if (!files.length) return;
+        setBusy(true);
+        let anyAdded = false;
+        for (const file of files) {
+          statusEl.textContent = `正在解析 PPT「${file.name}」…`;
+          try {
+            const buffer = await file.arrayBuffer();
+            const extractedText = await extractPptxText(buffer);
+            store.addClassNoteMaterial(note.id, { kind: "pptx", name: file.name, extractedText });
+            anyAdded = true;
+            statusEl.textContent = "";
+          } catch (err) {
+            statusEl.textContent = `解析 PPT「${file.name}」失败：${(err && err.message) || "请确认是有效的 .pptx 文件"}`;
+          }
+        }
+        setBusy(false);
+        if (anyAdded) rerender();
+      });
+
+      const photoBtn = h("button", { type: "button", class: "btn btn-outline btn-sm", onClick: () => photoInput.click() }, "+ 上传照片");
+      const pptxBtn = h("button", { type: "button", class: "btn btn-outline btn-sm", onClick: () => pptxInput.click() }, "+ 上传 PPT");
+
+      function materialRow(m) {
+        return h("div", { class: "list-row", style: "align-items:center;" }, [
+          h("span", { style: "flex:1;font-size:13px;" }, `${m.kind === "pptx" ? "📑" : "🖼️"} ${m.name || "未命名"}`),
+          h(
+            "span",
+            {
+              class: "row-delete",
+              onClick: () => {
+                if (m.kind === "image" && m.storageKey) deleteMaterialImage(m.storageKey).catch(() => {});
+                store.removeClassNoteMaterial(note.id, m.id);
+                rerender();
+              },
+            },
+            "删除"
+          ),
+        ]);
+      }
+
+      return h("div", { class: "card" }, [
+        h("div", { class: "section-row", style: "justify-content:space-between;align-items:center;" }, [
+          h("div", { class: "card-title" }, "课件材料"),
+          h("div", { class: "section-row", style: "gap:8px;" }, [photoBtn, pptxBtn, photoInput, pptxInput]),
+        ]),
+        materials.length
+          ? h("div", { style: "margin-top:8px;display:flex;flex-direction:column;gap:6px;" }, materials.map(materialRow))
+          : h(
+              "div", { class: "muted", style: "font-size:12px;margin-top:8px;" },
+              "还没有上传材料——可以上传老师的 PPT 课件文字，或拍照的板书/讲义照片，生成笔记时会一并参考。"
+            ),
+        statusEl,
+      ]);
+    }
+
+    // ---------- 闪卡 / 测验 / 提问 / 思维导图：都是在"笔记"tab 生成好的 notesMarkdown
+    // 基础上再让 AI 加工一次，所以几个 tab 都要求先有 notesMarkdown，没有的话只显示提示，
     // 不出现"生成"按钮——跟"笔记"tab 里翻译子 tab 的 gating 是同一个道理。 ----------
 
     function renderFlashcardsTab() {
@@ -1132,12 +1389,70 @@
       ]);
     }
 
+    // ---------- 思维导图：图形化节点连线图，同样要求先有 notesMarkdown 才能生成；
+    // 渲染部分（renderMindMapSvg）来自 mindMap.js，这里只管按钮/状态文字/gating。 ----------
+    function renderMindMapTab() {
+      const statusEl = h(
+        "div", { class: "muted", style: "font-size:12px;margin:6px 0 10px;" },
+        !note.notesMarkdown
+          ? "先在「笔记」tab 生成笔记，才能生成思维导图"
+          : hasClaudeKey ? "" : "还没设置 AI 服务密钥，去「数据与设置」填一个才能用这个功能"
+      );
+
+      async function generateMindMap() {
+        genBtn.disabled = true;
+        const prevLabel = genBtn.textContent;
+        genBtn.textContent = "生成中…";
+        statusEl.textContent = "AI 正在根据笔记生成思维导图，可能需要几秒到十几秒…";
+        try {
+          const text = await aiClient.callClaude({
+            apiKey: store.getSettings().claudeApiKey,
+            system: "你是一个帮学生整理思维导图的助手，只输出要求的 JSON，不要输出任何多余的解释。",
+            prompt: aiClient.buildMindMapPrompt(note.notesMarkdown, note.sourceLang),
+          });
+          const parsed = aiClient.parseMindMapResponse(text);
+          if (!parsed) throw aiClient.aiClientError("AI 没有生成出可用的思维导图，请重试一次", "empty_response");
+          store.setClassNoteMindMap(note.id, parsed);
+          rerender();
+        } catch (err) {
+          genBtn.disabled = false;
+          genBtn.textContent = prevLabel;
+          statusEl.textContent = err.message || "生成思维导图失败";
+        }
+      }
+
+      const genBtn = h(
+        "button",
+        {
+          class: "btn btn-primary", type: "button",
+          disabled: !hasClaudeKey || !note.notesMarkdown || undefined,
+          onClick: generateMindMap,
+        },
+        note.mindMap ? "重新生成思维导图" : "生成思维导图"
+      );
+
+      if (!note.mindMap) {
+        return h("div", {}, [
+          h("div", { class: "section-row", style: "justify-content:flex-end;" }, [genBtn]),
+          statusEl,
+          h("div", { class: "empty-hint" }, "还没有思维导图"),
+        ]);
+      }
+
+      return h("div", {}, [
+        h("div", { class: "section-row", style: "justify-content:flex-end;" }, [genBtn]),
+        statusEl,
+        h("div", { class: "card mindmap-container" }, [renderMindMapSvg(note.mindMap)]),
+      ]);
+    }
+
     const contentSlot = h("div", { style: "margin-top:14px;" });
     function buildTabContent() {
       if (detailTab === "transcript") return renderTranscriptTab();
       if (detailTab === "flashcards") return renderFlashcardsTab();
       if (detailTab === "quiz") return renderQuizTab();
       if (detailTab === "qa") return renderQaTab();
+      if (detailTab === "mindmap") return renderMindMapTab();
       return renderNotesTab();
     }
     function refreshTabContent() {
@@ -1153,6 +1468,7 @@
         { key: "flashcards", label: "闪卡" },
         { key: "quiz", label: "测验" },
         { key: "qa", label: "提问" },
+        { key: "mindmap", label: "思维导图" },
       ],
       activeKey: detailTab,
       onSelect: (key) => {
@@ -1189,6 +1505,7 @@
                     confirmLabel: "删除",
                     onConfirm: () => {
                       deleteAudio(note.audioKey).catch(() => {});
+                      deleteNoteMaterialImages(note);
                       store.removeClassNote(note.id);
                       view = { mode: "list" };
                       rerender();
@@ -1216,6 +1533,7 @@
               ])
             : null,
         ]),
+        renderMaterialsCard(),
         tabsSeg.el,
         contentSlot,
       ])
@@ -1280,6 +1598,7 @@
                     confirmLabel: "删除",
                     onConfirm: () => {
                       deleteAudio(note.audioKey).catch(() => {});
+                      deleteNoteMaterialImages(note);
                       store.removeClassNote(note.id);
                       rerender();
                     },

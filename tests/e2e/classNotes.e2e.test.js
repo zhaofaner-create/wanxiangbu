@@ -179,6 +179,79 @@ async function setTranslationProvider(page, provider, { apiKey, region } = {}) {
   await row.locator("button", { hasText: "保存" }).click();
 }
 
+/** 拦截 Claude API，跟 mockClaudeApi 一样，但把每次真正发出的请求体记到 captured.body 里，
+ * 用来验证"生成笔记时材料有没有被正确塞进提示词/图片内容块"这类需要检查请求内容的场景。 */
+async function mockClaudeApiCapturing(page, replyText, captured) {
+  await page.route("https://api.anthropic.com/v1/messages", async (route) => {
+    if (route.request().method() === "OPTIONS") {
+      await route.fulfill({
+        status: 204,
+        headers: {
+          "access-control-allow-origin": "*",
+          "access-control-allow-methods": "POST, OPTIONS",
+          "access-control-allow-headers": "content-type, x-api-key, anthropic-version, anthropic-dangerous-direct-browser-access",
+        },
+      });
+      return;
+    }
+    captured.body = route.request().postDataJSON();
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      headers: { "access-control-allow-origin": "*" },
+      body: JSON.stringify({ content: [{ type: "text", text: replyText }] }),
+    });
+  });
+}
+
+// ---------- 测试专用：手搓一个最小够用的 ZIP 打包器，造一份假 .pptx 文件用来测材料上传
+// （跟 tests/pptxText.test.js 里的是同一套写法，这里只需要最简单的"不压缩"(method 0)
+// 就够了，不需要再额外测一遍 deflate 解压——那部分 pptxText.test.js 已经单独覆盖过）。
+
+function u16(n) { const b = Buffer.alloc(2); b.writeUInt16LE(n, 0); return b; }
+function u32(n) { const b = Buffer.alloc(4); b.writeUInt32LE(n, 0); return b; }
+
+function buildFakePptx(slidesText) {
+  const files = slidesText.map((text, i) => ({
+    name: `ppt/slides/slide${i + 1}.xml`,
+    data: Buffer.from(
+      `<?xml version="1.0"?><p:sld xmlns:a="a" xmlns:p="p"><p:cSld><p:spTree><a:p><a:r><a:t>${text}</a:t></a:r></a:p></p:spTree></p:cSld></p:sld>`,
+      "utf-8"
+    ),
+  }));
+
+  const localParts = [];
+  const centralParts = [];
+  let offset = 0;
+  files.forEach((f) => {
+    const nameBuf = Buffer.from(f.name, "utf-8");
+    const localHeader = Buffer.concat([
+      u32(0x04034b50), u16(20), u16(0), u16(0), u16(0), u16(0),
+      u32(0), u32(f.data.length), u32(f.data.length),
+      u16(nameBuf.length), u16(0), nameBuf,
+    ]);
+    localParts.push(localHeader, f.data);
+    centralParts.push(Buffer.concat([
+      u32(0x02014b50), u16(20), u16(20), u16(0), u16(0), u16(0), u16(0),
+      u32(0), u32(f.data.length), u32(f.data.length),
+      u16(nameBuf.length), u16(0), u16(0), u16(0), u16(0), u32(0),
+      u32(offset), nameBuf,
+    ]));
+    offset += localHeader.length + f.data.length;
+  });
+  const localBuf = Buffer.concat(localParts);
+  const centralBuf = Buffer.concat(centralParts);
+  const eocd = Buffer.concat([
+    u32(0x06054b50), u16(0), u16(0), u16(files.length), u16(files.length),
+    u32(centralBuf.length), u32(localBuf.length), u16(0),
+  ]);
+  return Buffer.concat([localBuf, centralBuf, eocd]);
+}
+
+// 1x1 透明像素的最小合法 PNG，用来测拍照材料上传，不需要真的截一张图。
+const FAKE_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+
 async function startNewRecording(page, { title = "", targetLangLabel } = {}) {
   await goToModule(page, "课堂笔记");
   await page.locator("button", { hasText: "+ 新建课堂笔记" }).click();
@@ -689,5 +762,180 @@ describe("课堂笔记：列表与删除", () => {
 
     await page.locator("button", { hasText: "← 返回列表" }).click();
     await assert.doesNotReject(page.locator(".card", { hasText: "新标题" }).waitFor());
+  });
+});
+
+// 新功能：上传老师的 PPT 课件、拍照的板书/讲义照片，跟录音一起整理成笔记。用户明确
+// 要求"两个时机都要"——开始录音前（新建笔记弹窗里）和之后随时（笔记详情页里）都能传。
+describe("课堂笔记：课件材料上传（PPT + 拍照笔记）", () => {
+  test("开始录音前的弹窗里先选好材料，开始录音后材料会出现在详情页", async () => {
+    await goToModule(page, "课堂笔记");
+    await page.locator("button", { hasText: "+ 新建课堂笔记" }).click();
+    await page.locator(".modal-box input[type=text]").fill("材料预上传测试");
+
+    await page.locator('.modal-box input[type="file"][accept="image/*"]').setInputFiles({
+      name: "板书.png",
+      mimeType: "image/png",
+      buffer: Buffer.from(FAKE_PNG_BASE64, "base64"),
+    });
+    await assert.doesNotReject(page.locator(".modal-box", { hasText: "板书.png" }).waitFor());
+
+    await page.locator('.modal-box input[type="file"][accept^=".pptx"]').setInputFiles({
+      name: "第1讲.pptx",
+      mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      buffer: buildFakePptx(["课程简介"]),
+    });
+    await assert.doesNotReject(page.locator(".modal-box", { hasText: "第1讲.pptx" }).waitFor());
+
+    await page.locator(".modal-box button", { hasText: "开始录音" }).click();
+    await assert.doesNotReject(page.locator(".card-title", { hasText: "材料预上传测试" }).waitFor());
+    await page.locator("button", { hasText: "结束录音" }).click();
+
+    const materialsCard = page.locator(".card", { hasText: "课件材料" });
+    await assert.doesNotReject(materialsCard.locator("text=板书.png").waitFor());
+    await assert.doesNotReject(materialsCard.locator("text=第1讲.pptx").waitFor());
+  });
+
+  test("笔记详情页里随时可以补充/删除材料", async () => {
+    await startNewRecording(page, { title: "详情页材料测试" });
+    await page.locator("button", { hasText: "结束录音" }).click();
+
+    const materialsCard = page.locator(".card", { hasText: "课件材料" });
+    await assert.doesNotReject(materialsCard.locator("text=还没有上传材料").waitFor());
+
+    await materialsCard.locator('input[type="file"][accept="image/*"]').setInputFiles({
+      name: "笔记照片.jpg",
+      mimeType: "image/jpeg",
+      buffer: Buffer.from(FAKE_PNG_BASE64, "base64"),
+    });
+    await assert.doesNotReject(materialsCard.locator("text=笔记照片.jpg").waitFor());
+
+    await materialsCard.locator('input[type="file"][accept^=".pptx"]').setInputFiles({
+      name: "课件.pptx",
+      mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      buffer: buildFakePptx(["第一页内容", "第二页内容"]),
+    });
+    await assert.doesNotReject(materialsCard.locator("text=课件.pptx").waitFor());
+
+    // 删除照片材料，PPT 材料不受影响。
+    await materialsCard.locator(".list-row", { hasText: "笔记照片.jpg" }).locator(".row-delete").click();
+    assert.equal(await materialsCard.locator("text=笔记照片.jpg").count(), 0);
+    await assert.doesNotReject(materialsCard.locator("text=课件.pptx").waitFor());
+  });
+
+  test("解析不出内容的 PPT 文件会提示失败，不影响已有材料", async () => {
+    await startNewRecording(page, { title: "PPT解析失败测试" });
+    await page.locator("button", { hasText: "结束录音" }).click();
+
+    const materialsCard = page.locator(".card", { hasText: "课件材料" });
+    await materialsCard.locator('input[type="file"][accept^=".pptx"]').setInputFiles({
+      name: "坏文件.pptx",
+      mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      buffer: Buffer.from("这根本不是一个 ZIP 文件"),
+    });
+    await assert.doesNotReject(materialsCard.locator("text=解析 PPT「坏文件.pptx」失败").waitFor());
+  });
+
+  test("生成笔记时会把材料一并发给 AI：PPT 文字进提示词、照片作为图片内容块", async () => {
+    await setApiKey(page, "sk-test-key");
+    await startNewRecording(page, { title: "材料参与生成笔记测试" });
+    await page.evaluate(() => window.__emitTranscript("Bonjour à tous", true));
+    await page.locator("button", { hasText: "结束录音" }).click();
+
+    const materialsCard = page.locator(".card", { hasText: "课件材料" });
+    await materialsCard.locator('input[type="file"][accept^=".pptx"]').setInputFiles({
+      name: "参考课件.pptx",
+      mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      buffer: buildFakePptx(["经济学基本概念"]),
+    });
+    await assert.doesNotReject(materialsCard.locator("text=参考课件.pptx").waitFor());
+
+    await materialsCard.locator('input[type="file"][accept="image/*"]').setInputFiles({
+      name: "板书照片.png",
+      mimeType: "image/png",
+      buffer: Buffer.from(FAKE_PNG_BASE64, "base64"),
+    });
+    await assert.doesNotReject(materialsCard.locator("text=板书照片.png").waitFor());
+
+    const captured = {};
+    await mockClaudeApiCapturing(page, "# 结合材料整理的笔记\n- 经济学基本概念", captured);
+    await page.locator(".tabs .tab-btn", { hasText: "笔记" }).click();
+    await page.locator("button", { hasText: "生成笔记" }).click();
+    await assert.doesNotReject(page.locator(".note-markdown", { hasText: "结合材料整理的笔记" }).waitFor());
+
+    const content = captured.body.messages[0].content;
+    assert.ok(Array.isArray(content), "带了图片之后 content 应该是数组形式，不再是纯字符串");
+    const imageBlocks = content.filter((b) => b.type === "image");
+    const textBlock = content.find((b) => b.type === "text");
+    assert.equal(imageBlocks.length, 1);
+    assert.equal(imageBlocks[0].source.media_type, "image/png");
+    assert.match(textBlock.text, /课件材料/);
+    assert.match(textBlock.text, /经济学基本概念/);
+  });
+});
+
+// 新功能：思维导图（图形化节点连线图），跟闪卡/测验一样基于已经生成好的笔记正文，
+// 用同样的 gating 规则（先有 notesMarkdown 才能生成）。
+describe("课堂笔记：AI 生成思维导图", () => {
+  test("还没生成原文笔记时，思维导图 tab 显示提示、生成按钮禁用", async () => {
+    await setApiKey(page, "sk-test-key");
+    await startNewRecording(page, { title: "还没生成笔记-思维导图" });
+    await page.evaluate(() => window.__emitTranscript("一句话", true));
+    await page.locator("button", { hasText: "结束录音" }).click();
+    await page.locator(".tabs .tab-btn", { hasText: "思维导图" }).click();
+    await assert.doesNotReject(page.locator(".content-area", { hasText: "先在「笔记」tab 生成笔记" }).waitFor());
+    assert.equal(await page.locator("button", { hasText: "生成思维导图" }).isDisabled(), true);
+  });
+
+  test("生成笔记后可以生成思维导图，图形化节点连线图正常渲染出根节点和分支", async () => {
+    await setApiKey(page, "sk-test-key");
+    await startNewRecording(page, { title: "思维导图测试" });
+    await page.evaluate(() => window.__emitTranscript("一句话", true));
+    await page.locator("button", { hasText: "结束录音" }).click();
+
+    await mockClaudeApi(page, "# 课堂要点\n- 第一点\n- 第二点");
+    await page.locator(".tabs .tab-btn", { hasText: "笔记" }).click();
+    await page.locator("button", { hasText: "生成笔记" }).click();
+    await assert.doesNotReject(page.locator(".note-markdown", { hasText: "课堂要点" }).waitFor());
+
+    await mockClaudeApi(page, JSON.stringify({
+      title: "课堂要点",
+      children: [
+        { title: "第一点", children: [{ title: "细节A", children: [] }] },
+        { title: "第二点", children: [] },
+      ],
+    }));
+    await page.locator(".tabs .tab-btn", { hasText: "思维导图" }).click();
+    await page.locator("button", { hasText: "生成思维导图" }).click();
+
+    await assert.doesNotReject(page.locator(".mindmap-svg").waitFor());
+    // SVG 的 <text>/<tspan> 不是常规 DOM 文字排版，innerText 在不同浏览器上表现不一致，
+    // 用 textContent 更可靠（拿到所有子节点文字拼起来，不受 tspan 拆行影响）。
+    const svgText = await page.locator(".mindmap-svg").textContent();
+    assert.match(svgText, /课堂要点/);
+    assert.match(svgText, /第一点/);
+    assert.match(svgText, /细节A/);
+    assert.equal(await page.locator(".mindmap-node").count(), 4); // 根 + 第一点 + 细节A + 第二点
+    assert.equal(await page.locator(".mindmap-edge").count(), 3);
+
+    // 生成过一次之后，按钮文字应该变成"重新生成思维导图"。
+    await assert.doesNotReject(page.locator("button", { hasText: "重新生成思维导图" }).waitFor());
+  });
+
+  test("AI 没有返回可用的思维导图（比如返回的不是合法 JSON）时，显示错误提示，按钮恢复可点", async () => {
+    await setApiKey(page, "sk-test-key");
+    await startNewRecording(page, { title: "思维导图报错测试" });
+    await page.evaluate(() => window.__emitTranscript("一句话", true));
+    await page.locator("button", { hasText: "结束录音" }).click();
+    await mockClaudeApi(page, "# 笔记标题\n正文");
+    await page.locator(".tabs .tab-btn", { hasText: "笔记" }).click();
+    await page.locator("button", { hasText: "生成笔记" }).click();
+    await assert.doesNotReject(page.locator(".note-markdown", { hasText: "笔记标题" }).waitFor());
+
+    await mockClaudeApi(page, "抱歉，我没法生成思维导图。");
+    await page.locator(".tabs .tab-btn", { hasText: "思维导图" }).click();
+    await page.locator("button", { hasText: "生成思维导图" }).click();
+    await assert.doesNotReject(page.locator(".content-area", { hasText: "没有生成出可用的思维导图" }).waitFor());
+    assert.equal(await page.locator("button", { hasText: "生成思维导图" }).isDisabled(), false);
   });
 });

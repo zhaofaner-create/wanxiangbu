@@ -981,3 +981,15 @@ table.data-table th { background: rgba(255,255,255,0.5); font-weight: 700; color
 .qa-bubble { max-width: 88%; padding: 8px 12px; border-radius: 12px; font-size: 13.5px; line-height: 1.6; white-space: pre-wrap; }
 .qa-bubble-user { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
 .qa-bubble-assistant { align-self: flex-start; background: var(--g-tint-clear-strong); color: var(--text-primary); border-bottom-left-radius: 4px; }
+
+/* ---------- 课堂笔记模块：思维导图（图形化节点连线图，见 js/components/mindMap.js） ---------- */
+
+.mindmap-container { overflow-x: auto; }
+.mindmap-svg { display: block; width: 100%; min-width: 480px; height: auto; }
+.mindmap-edge { stroke: var(--g-hairline); stroke-width: 1.5; }
+.mindmap-node-rect {
+  fill: var(--g-tint-clear-strong); stroke: var(--g-hairline); stroke-width: 1;
+}
+.mindmap-node-depth-0 .mindmap-node-rect { fill: var(--accent); stroke: var(--accent); }
+.mindmap-node-depth-0 .mindmap-node-text { fill: #fff; font-weight: 700; }
+.mindmap-node-text { fill: var(--text-primary); font-size: 12.5px; font-family: inherit; }

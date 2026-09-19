@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const {
   callClaude,
   extractText,
+  buildMessageContent,
   languageName,
   formatSeconds,
   formatSegmentsForPrompt,
@@ -14,6 +15,9 @@ const {
   buildQuizPrompt,
   parseQuizResponse,
   buildQaPrompt,
+  buildMindMapPrompt,
+  parseMindMapResponse,
+  extractJsonObject,
   DEFAULT_MODEL,
 } = require("../js/aiClient.js");
 
@@ -129,6 +133,20 @@ describe("buildNotesPrompt", () => {
     assert.match(prompt, /中文/);
     assert.match(prompt, /\[00:00→00:05\] Bonjour à tous/);
     assert.match(prompt, /Markdown/);
+    assert.doesNotMatch(prompt, /课件材料/);
+  });
+
+  test("传了 materialsText 时，会拼进「课件材料」段落；没传/空字符串则不出现", () => {
+    const withMaterials = buildNotesPrompt(
+      [{ start: 0, end: 5, text: "Bonjour" }],
+      "zh",
+      "【PPT：第3讲.pptx】\n标题页"
+    );
+    assert.match(withMaterials, /课件材料/);
+    assert.match(withMaterials, /标题页/);
+
+    const withBlank = buildNotesPrompt([{ start: 0, end: 5, text: "Bonjour" }], "zh", "   ");
+    assert.doesNotMatch(withBlank, /课件材料/);
   });
 });
 
@@ -222,6 +240,69 @@ describe("buildQaPrompt", () => {
   });
 });
 
+describe("buildMindMapPrompt", () => {
+  test("包含笔记语言名称、笔记正文，并要求输出嵌套 JSON 对象", () => {
+    const prompt = buildMindMapPrompt("# 标题\n正文内容", "zh");
+    assert.match(prompt, /中文/);
+    assert.match(prompt, /# 标题\n正文内容/);
+    assert.match(prompt, /children/);
+    assert.match(prompt, /JSON/);
+  });
+});
+
+describe("extractJsonObject", () => {
+  test("从文字里提取第一个完整的 JSON 对象", () => {
+    const obj = extractJsonObject('好的：\n{"a":1,"b":{"c":2}}\n供参考。');
+    assert.deepEqual(obj, { a: 1, b: { c: 2 } });
+  });
+
+  test("解析出来是数组（不是对象）时返回 null", () => {
+    assert.equal(extractJsonObject("[1,2,3]"), null);
+  });
+
+  test("找不到大括号或解析失败都返回 null，不抛错", () => {
+    assert.equal(extractJsonObject("没有 JSON"), null);
+    assert.equal(extractJsonObject("{坏掉的json"), null);
+    assert.equal(extractJsonObject(""), null);
+    assert.equal(extractJsonObject(undefined), null);
+  });
+});
+
+describe("parseMindMapResponse", () => {
+  test("正常解析出嵌套树，递归保留 title 和 children", () => {
+    const tree = parseMindMapResponse(JSON.stringify({
+      title: "根节点",
+      children: [
+        { title: "分支1", children: [{ title: "叶子1", children: [] }] },
+        { title: "分支2", children: [] },
+      ],
+    }));
+    assert.equal(tree.title, "根节点");
+    assert.equal(tree.children.length, 2);
+    assert.equal(tree.children[0].children[0].title, "叶子1");
+  });
+
+  test("丢弃 title 为空或缺失的子节点，不影响其它兄弟节点", () => {
+    const tree = parseMindMapResponse(JSON.stringify({
+      title: "根节点",
+      children: [{ title: "" }, { children: [] }, { title: "有效分支", children: [] }],
+    }));
+    assert.equal(tree.children.length, 1);
+    assert.equal(tree.children[0].title, "有效分支");
+  });
+
+  test("children 缺失或不是数组时当成没有子节点，不报错", () => {
+    const tree = parseMindMapResponse(JSON.stringify({ title: "孤立根节点" }));
+    assert.deepEqual(tree, { title: "孤立根节点", children: [] });
+  });
+
+  test("根节点本身 title 为空、解析失败、或整体不是对象，都返回 null", () => {
+    assert.equal(parseMindMapResponse(JSON.stringify({ title: "" })), null);
+    assert.equal(parseMindMapResponse("不是JSON"), null);
+    assert.equal(parseMindMapResponse(JSON.stringify([1, 2])), null);
+  });
+});
+
 // ---------- extractText ----------
 
 describe("extractText", () => {
@@ -249,6 +330,36 @@ describe("extractText", () => {
     assert.equal(extractText({}), "");
     assert.equal(extractText(null), "");
     assert.equal(extractText({ content: "oops" }), "");
+  });
+});
+
+describe("buildMessageContent", () => {
+  test("没有图片时，原样返回纯文字（跟以前完全一样，不给现有调用方增加负担）", () => {
+    assert.equal(buildMessageContent("你好", undefined), "你好");
+    assert.equal(buildMessageContent("你好", []), "你好");
+  });
+
+  test("有图片时，拼成「图片在前、文字在后」的内容块数组", () => {
+    const content = buildMessageContent("请看图回答", [
+      { base64Data: "AAAA", mediaType: "image/png" },
+    ]);
+    assert.deepEqual(content, [
+      { type: "image", source: { type: "base64", media_type: "image/png", data: "AAAA" } },
+      { type: "text", text: "请看图回答" },
+    ]);
+  });
+
+  test("多张图片按顺序排列；没有 mediaType 时默认 image/jpeg；没有 base64Data 的条目被过滤掉", () => {
+    const content = buildMessageContent("文字", [
+      { base64Data: "BBBB" },
+      { base64Data: "" },
+      null,
+      { base64Data: "CCCC", mediaType: "image/webp" },
+    ]);
+    assert.equal(content.length, 3); // 2张有效图片 + 1段文字
+    assert.equal(content[0].source.media_type, "image/jpeg");
+    assert.equal(content[1].source.media_type, "image/webp");
+    assert.equal(content[2].text, "文字");
   });
 });
 
@@ -453,5 +564,26 @@ describe("callClaude", () => {
     });
     assert.equal(capturedBody.model, "claude-opus-5");
     assert.equal(capturedBody.max_tokens, 100);
+  });
+
+  test("传了 images 时，请求体里的 content 是图片+文字的内容块数组", async () => {
+    let capturedBody;
+    await callClaude({
+      apiKey: "sk-test",
+      prompt: "这张图里写了什么？",
+      images: [{ base64Data: "AAAA", mediaType: "image/jpeg" }],
+      fetchImpl: async (url, options) => {
+        capturedBody = JSON.parse(options.body);
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ content: [{ type: "text", text: "ok" }] }),
+        };
+      },
+    });
+    assert.deepEqual(capturedBody.messages[0].content, [
+      { type: "image", source: { type: "base64", media_type: "image/jpeg", data: "AAAA" } },
+      { type: "text", text: "这张图里写了什么？" },
+    ]);
   });
 });
