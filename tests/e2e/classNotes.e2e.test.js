@@ -400,6 +400,155 @@ describe("课堂笔记：AI 整理出的笔记正文也能再翻译成其它语�
   });
 });
 
+describe("课堂笔记：AI 根据笔记生成闪卡", () => {
+  test("还没生成原文笔记时，闪卡 tab 显示提示、生成按钮禁用", async () => {
+    await setApiKey(page, "sk-test-key");
+    await startNewRecording(page, { title: "还没生成笔记-闪卡" });
+    await page.evaluate(() => window.__emitTranscript("一句话", true));
+    await page.locator("button", { hasText: "结束录音" }).click();
+    await page.locator(".tabs .tab-btn", { hasText: "闪卡" }).click();
+    await assert.doesNotReject(page.locator(".content-area", { hasText: "先在「笔记」tab 生成笔记" }).waitFor());
+    assert.equal(await page.locator("button", { hasText: "生成闪卡" }).isDisabled(), true);
+  });
+
+  test("生成笔记后可以生成闪卡，能翻页、点击卡片查看答案", async () => {
+    await setApiKey(page, "sk-test-key");
+    await startNewRecording(page, { title: "闪卡测试" });
+    await page.evaluate(() => window.__emitTranscript("一句话", true));
+    await page.locator("button", { hasText: "结束录音" }).click();
+
+    await mockClaudeApi(page, "# 课堂要点\n- 第一点");
+    await page.locator(".tabs .tab-btn", { hasText: "笔记" }).click();
+    await page.locator("button", { hasText: "生成笔记" }).click();
+    await assert.doesNotReject(page.locator(".note-markdown", { hasText: "课堂要点" }).waitFor());
+
+    await mockClaudeApi(page, JSON.stringify([
+      { q: "第一题问题", a: "第一题答案" },
+      { q: "第二题问题", a: "第二题答案" },
+    ]));
+    await page.locator(".tabs .tab-btn", { hasText: "闪卡" }).click();
+    await page.locator("button", { hasText: "生成闪卡" }).click();
+    await assert.doesNotReject(page.locator(".flashcard-card", { hasText: "第一题问题" }).waitFor());
+    assert.doesNotMatch(await page.locator(".flashcard-card").innerText(), /第一题答案/);
+
+    // 点击卡片翻到答案那一面
+    await page.locator(".flashcard-card").click();
+    await assert.doesNotReject(page.locator(".flashcard-card", { hasText: "第一题答案" }).waitFor());
+
+    // 翻到下一张：换了新问题，且不会带着上一张"已翻开"的状态
+    await page.locator("button", { hasText: "下一张" }).click();
+    await assert.doesNotReject(page.locator(".flashcard-card", { hasText: "第二题问题" }).waitFor());
+    assert.doesNotMatch(await page.locator(".flashcard-card").innerText(), /第二题答案/);
+
+    await page.locator("button", { hasText: "上一张" }).click();
+    await assert.doesNotReject(page.locator(".flashcard-card", { hasText: "第一题问题" }).waitFor());
+  });
+
+  test("AI 服务返回错误时，显示错误提示，按钮恢复可点", async () => {
+    await setApiKey(page, "sk-test-key");
+    await startNewRecording(page, { title: "闪卡报错测试" });
+    await page.evaluate(() => window.__emitTranscript("一句话", true));
+    await page.locator("button", { hasText: "结束录音" }).click();
+    await mockClaudeApi(page, "# 笔记标题\n正文");
+    await page.locator(".tabs .tab-btn", { hasText: "笔记" }).click();
+    await page.locator("button", { hasText: "生成笔记" }).click();
+    await assert.doesNotReject(page.locator(".note-markdown", { hasText: "笔记标题" }).waitFor());
+
+    // 返回的不是合法 JSON，解析不出任何一张卡片。
+    await mockClaudeApi(page, "抱歉，我没法生成闪卡。");
+    await page.locator(".tabs .tab-btn", { hasText: "闪卡" }).click();
+    await page.locator("button", { hasText: "生成闪卡" }).click();
+    await assert.doesNotReject(page.locator(".content-area", { hasText: "没有生成出可用的闪卡" }).waitFor());
+    assert.equal(await page.locator("button", { hasText: "生成闪卡" }).isDisabled(), false);
+  });
+});
+
+describe("课堂笔记：AI 根据笔记生成测验", () => {
+  test("还没生成原文笔记时，测验 tab 显示提示、生成按钮禁用", async () => {
+    await setApiKey(page, "sk-test-key");
+    await startNewRecording(page, { title: "还没生成笔记-测验" });
+    await page.evaluate(() => window.__emitTranscript("一句话", true));
+    await page.locator("button", { hasText: "结束录音" }).click();
+    await page.locator(".tabs .tab-btn", { hasText: "测验" }).click();
+    await assert.doesNotReject(page.locator(".content-area", { hasText: "先在「笔记」tab 生成笔记" }).waitFor());
+    assert.equal(await page.locator("button", { hasText: "生成测验" }).isDisabled(), true);
+  });
+
+  test("生成测验后选对/选错分别标绿/标红，改选也会跟着更新", async () => {
+    await setApiKey(page, "sk-test-key");
+    await startNewRecording(page, { title: "测验测试" });
+    await page.evaluate(() => window.__emitTranscript("一句话", true));
+    await page.locator("button", { hasText: "结束录音" }).click();
+
+    await mockClaudeApi(page, "# 课堂要点\n- 第一点");
+    await page.locator(".tabs .tab-btn", { hasText: "笔记" }).click();
+    await page.locator("button", { hasText: "生成笔记" }).click();
+    await assert.doesNotReject(page.locator(".note-markdown", { hasText: "课堂要点" }).waitFor());
+
+    await mockClaudeApi(page, JSON.stringify([
+      { question: "1+1=?", options: ["1", "2", "3", "4"], correctIndex: 1 },
+    ]));
+    await page.locator(".tabs .tab-btn", { hasText: "测验" }).click();
+    await page.locator("button", { hasText: "生成测验" }).click();
+    await assert.doesNotReject(page.locator(".content-area", { hasText: "1+1=?" }).waitFor());
+
+    const options = page.locator(".card .quiz-option");
+    await assert.doesNotReject(options.nth(3).waitFor());
+
+    // 选错误答案"1"（下标0）
+    await options.nth(0).click();
+    assert.match(await options.nth(0).getAttribute("class"), /quiz-option-wrong/);
+    assert.match(await options.nth(1).getAttribute("class"), /quiz-option-correct/);
+
+    // 改选正确答案"2"（下标1）：之前标红的选项恢复正常
+    await options.nth(1).click();
+    assert.match(await options.nth(1).getAttribute("class"), /quiz-option-correct/);
+    assert.doesNotMatch(await options.nth(0).getAttribute("class"), /quiz-option-wrong/);
+  });
+});
+
+describe("课堂笔记：针对笔记内容提问", () => {
+  test("还没生成原文笔记时，提问框禁用、显示提示", async () => {
+    await setApiKey(page, "sk-test-key");
+    await startNewRecording(page, { title: "还没生成笔记-提问" });
+    await page.evaluate(() => window.__emitTranscript("一句话", true));
+    await page.locator("button", { hasText: "结束录音" }).click();
+    await page.locator(".tabs .tab-btn", { hasText: "提问" }).click();
+    await assert.doesNotReject(page.locator(".content-area", { hasText: "先在「笔记」tab 生成笔记" }).waitFor());
+    assert.equal(await page.locator('input[placeholder="问一个关于这条笔记的问题…"]').isDisabled(), true);
+  });
+
+  test("生成笔记后可以提问，AI 根据笔记内容回答，多轮问答都保留在列表里", async () => {
+    await setApiKey(page, "sk-test-key");
+    await startNewRecording(page, { title: "提问测试" });
+    await page.evaluate(() => window.__emitTranscript("一句话", true));
+    await page.locator("button", { hasText: "结束录音" }).click();
+
+    await mockClaudeApi(page, "# 课堂要点\n- 光合作用需要光照");
+    await page.locator(".tabs .tab-btn", { hasText: "笔记" }).click();
+    await page.locator("button", { hasText: "生成笔记" }).click();
+    await assert.doesNotReject(page.locator(".note-markdown", { hasText: "光合作用" }).waitFor());
+
+    await page.locator(".tabs .tab-btn", { hasText: "提问" }).click();
+    const input = page.locator('input[placeholder="问一个关于这条笔记的问题…"]');
+
+    await mockClaudeApi(page, "光合作用需要光照、水和二氧化碳。");
+    await input.fill("光合作用需要什么？");
+    await page.locator("button", { hasText: "发送" }).click();
+    await assert.doesNotReject(page.locator(".qa-bubble-user", { hasText: "光合作用需要什么？" }).waitFor());
+    await assert.doesNotReject(page.locator(".qa-bubble-assistant", { hasText: "光合作用需要光照" }).waitFor());
+
+    // 追问一次，之前的问答记录还在（用来验证历史记录会带进下一次提问的上下文）。
+    await mockClaudeApi(page, "水是必需的，缺水植物没法进行光合作用。");
+    await input.fill("那水呢？");
+    await page.locator("button", { hasText: "发送" }).click();
+    await assert.doesNotReject(page.locator(".qa-bubble-user", { hasText: "那水呢？" }).waitFor());
+    await assert.doesNotReject(page.locator(".qa-bubble-assistant", { hasText: "水是必需的" }).waitFor());
+    assert.equal(await page.locator(".qa-bubble-user").count(), 2);
+    assert.equal(await page.locator(".qa-bubble-assistant").count(), 2);
+  });
+});
+
 describe("课堂笔记：多语言互译（转录 tab 里原文+译文合并显示，不再单独分翻译 tab）", () => {
   test("没有配置当前使用的翻译服务时，翻译按钮禁用并提示去设置", async () => {
     await startNewRecording(page, { title: "没配置翻译服务的笔记", targetLangLabel: "中文" });

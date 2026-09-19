@@ -1287,6 +1287,13 @@
         // 笔记正文翻译成其它语言的结果，按语言代码分开存：{ en: "markdown...", zh: "..." }；
         // 没翻译过的语言不会出现在这个对象里，跟 translations（转录的翻译）是同一个模式。
         notesTranslations: {},
+        // 闪卡：[{question, answer}]，根据 notesMarkdown 生成，没生成过是空数组。
+        flashcards: [],
+        // 测验：[{question, options:[...], correctIndex, selectedIndex}]，selectedIndex 是
+        // 学生选的答案下标，还没作答时是 null；没生成过是空数组。
+        quiz: [],
+        // 针对这条笔记的问答记录：[{role:"user"|"assistant", text}]，没问过是空数组。
+        qaMessages: [],
         // 录音时长（秒）和音频在 IndexedDB 里的引用 key；没有录完/还没存音频时为 null。
         audioDurationSeconds: 0,
         audioKey: null,
@@ -1383,6 +1390,53 @@
       const note = findClassNote(id);
       if (!note) return null;
       note.notesTranslations = { ...(note.notesTranslations || {}), [lang]: typeof markdown === "string" ? markdown : "" };
+      touchClassNote(note);
+      persist();
+      return note;
+    }
+
+    /** 保存 AI 根据笔记正文生成的闪卡（整段替换，重新生成会覆盖上一批）。 */
+    function setClassNoteFlashcards(id, flashcards) {
+      const note = findClassNote(id);
+      if (!note) return null;
+      note.flashcards = Array.isArray(flashcards) ? flashcards : [];
+      touchClassNote(note);
+      persist();
+      return note;
+    }
+
+    /** 保存 AI 根据笔记正文生成的测验题（整段替换）；每题附带的 selectedIndex 统一
+     * 重置为 null（还没作答），避免重新生成一批新题目之后，界面上还留着上一批题目
+     * 答没答过的痕迹。 */
+    function setClassNoteQuiz(id, quiz) {
+      const note = findClassNote(id);
+      if (!note) return null;
+      note.quiz = Array.isArray(quiz) ? quiz.map((q) => ({ ...q, selectedIndex: null })) : [];
+      touchClassNote(note);
+      persist();
+      return note;
+    }
+
+    /** 记录学生在测验第 questionIndex 题选的答案下标；题目不存在时安全地什么都不做。 */
+    function setClassNoteQuizAnswer(id, questionIndex, selectedIndex) {
+      const note = findClassNote(id);
+      if (!note) return null;
+      const list = note.quiz || [];
+      const q = list[questionIndex];
+      if (!q) return note;
+      q.selectedIndex = selectedIndex;
+      touchClassNote(note);
+      persist();
+      return note;
+    }
+
+    /** 给这条笔记的问答记录追加一条消息（role 是 "user" 或 "assistant"）；空文本不追加。 */
+    function addClassNoteQaMessage(id, role, text) {
+      const note = findClassNote(id);
+      if (!note) return null;
+      const trimmed = typeof text === "string" ? text.trim() : "";
+      if (!trimmed) return note;
+      note.qaMessages = [...(note.qaMessages || []), { role, text: trimmed }];
       touchClassNote(note);
       persist();
       return note;
@@ -1540,6 +1594,7 @@
       addBookNote, removeBookNote, listBookNotes, countBookNotes, listBooksFinishedSeries,
       addClassNote, findClassNote, appendClassNoteTranscript, finishClassNoteRecording,
       setClassNoteTranslation, appendClassNoteTranslation, setClassNoteMarkdown, setClassNoteNotesTranslation,
+      setClassNoteFlashcards, setClassNoteQuiz, setClassNoteQuizAnswer, addClassNoteQaMessage,
       renameClassNote, removeClassNote, listClassNotes,
       getSettings, updateHomeCardVisibility, setLastBackupAt, manualSave,
       setFontScale, setTheme, toggleTheme, updateProfile,

@@ -1464,6 +1464,63 @@ describe("课堂笔记：录音+转录+翻译+AI整理笔记的数据层", () =>
     assert.equal(store.findClassNote(note.id).notesTranslations.en, "# New Title");
   });
 
+  test("保存 AI 生成的闪卡：整段替换，重新生成会覆盖上一批", () => {
+    const note = store.addClassNote({ title: "课6" });
+    store.setClassNoteMarkdown(note.id, "# 标题\n正文");
+    const updated = store.setClassNoteFlashcards(note.id, [
+      { question: "问题1", answer: "答案1" },
+      { question: "问题2", answer: "答案2" },
+    ]);
+    assert.equal(updated.flashcards.length, 2);
+    store.setClassNoteFlashcards(note.id, [{ question: "新问题", answer: "新答案" }]);
+    const found = store.findClassNote(note.id);
+    assert.deepEqual(found.flashcards, [{ question: "新问题", answer: "新答案" }]);
+  });
+
+  test("保存 AI 生成的测验题，每题自带 selectedIndex（初始是 null）", () => {
+    const note = store.addClassNote({ title: "课7" });
+    const updated = store.setClassNoteQuiz(note.id, [
+      { question: "1+1=?", options: ["1", "2"], correctIndex: 1 },
+    ]);
+    assert.deepEqual(updated.quiz, [{ question: "1+1=?", options: ["1", "2"], correctIndex: 1, selectedIndex: null }]);
+  });
+
+  test("记录测验作答；重新生成测验会重置所有作答", () => {
+    const note = store.addClassNote({ title: "课8" });
+    store.setClassNoteQuiz(note.id, [
+      { question: "q1", options: ["a", "b"], correctIndex: 0 },
+      { question: "q2", options: ["a", "b"], correctIndex: 1 },
+    ]);
+    store.setClassNoteQuizAnswer(note.id, 0, 1);
+    let found = store.findClassNote(note.id);
+    assert.equal(found.quiz[0].selectedIndex, 1);
+    assert.equal(found.quiz[1].selectedIndex, null); // 只影响第0题
+
+    // 重新点其它选项：覆盖，不是追加
+    store.setClassNoteQuizAnswer(note.id, 0, 0);
+    assert.equal(store.findClassNote(note.id).quiz[0].selectedIndex, 0);
+
+    // 对不存在的题目下标安全地什么都不做
+    assert.equal(store.setClassNoteQuizAnswer(note.id, 99, 0), found);
+
+    store.setClassNoteQuiz(note.id, [{ question: "q1新", options: ["a", "b"], correctIndex: 0 }]);
+    found = store.findClassNote(note.id);
+    assert.equal(found.quiz.length, 1);
+    assert.equal(found.quiz[0].selectedIndex, null);
+  });
+
+  test("提问记录按顺序追加，用户和助手的消息都能存；空文本不追加", () => {
+    const note = store.addClassNote({ title: "课9" });
+    store.addClassNoteQaMessage(note.id, "user", "这是什么意思？");
+    store.addClassNoteQaMessage(note.id, "assistant", "这是……的意思。");
+    store.addClassNoteQaMessage(note.id, "user", "   "); // 空白文本不追加
+    const found = store.findClassNote(note.id);
+    assert.deepEqual(found.qaMessages, [
+      { role: "user", text: "这是什么意思？" },
+      { role: "assistant", text: "这是……的意思。" },
+    ]);
+  });
+
   test("重命名和删除", () => {
     const note = store.addClassNote({ title: "原标题" });
     store.renameClassNote(note.id, "新标题");
@@ -1487,6 +1544,10 @@ describe("课堂笔记：录音+转录+翻译+AI整理笔记的数据层", () =>
     assert.equal(store.appendClassNoteTranslation("no-such-id", "zh", []), null);
     assert.equal(store.setClassNoteMarkdown("no-such-id", "x"), null);
     assert.equal(store.setClassNoteNotesTranslation("no-such-id", "zh", "x"), null);
+    assert.equal(store.setClassNoteFlashcards("no-such-id", []), null);
+    assert.equal(store.setClassNoteQuiz("no-such-id", []), null);
+    assert.equal(store.setClassNoteQuizAnswer("no-such-id", 0, 0), null);
+    assert.equal(store.addClassNoteQaMessage("no-such-id", "user", "x"), null);
     assert.equal(store.renameClassNote("no-such-id", "x"), null);
   });
 

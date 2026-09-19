@@ -183,10 +183,114 @@
     ].join("\n");
   }
 
+  // ---------- 闪卡 / 测验 / 提问：都是在"整理笔记"生成的 Markdown 正文基础上再让 AI
+  // 做一次加工，所以三个功能在详情页里都要求先有 note.notesMarkdown 才能用。闪卡和
+  // 测验要求模型直接输出 JSON（而不是像翻译那样"编号|文字"一行一行来），因为条目数量
+  // 本来就不固定、还带着选项/正确下标这些结构化字段，JSON 更不容易解析错位。 ----------
+
+  /** 从模型回复里找出第一个完整的 JSON 数组并解析；找不到或解析失败都返回 null，
+   * 不抛错——调用方 (parseFlashcardsResponse/parseQuizResponse) 统一处理成"空列表"，
+   * 上层再决定要不要提示用户重试，比在这里抛错更灵活。 */
+  function extractJsonArray(text) {
+    const raw = text || "";
+    const start = raw.indexOf("[");
+    const end = raw.lastIndexOf("]");
+    if (start === -1 || end === -1 || end < start) return null;
+    try {
+      const parsed = JSON.parse(raw.slice(start, end + 1));
+      return Array.isArray(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** 构造"根据整理好的笔记正文生成问答闪卡"的提示词。 */
+  function buildFlashcardsPrompt(notesMarkdown, langCode) {
+    const langName = languageName(langCode);
+    return [
+      `下面是一份${langName}课堂笔记。请从中提炼出适合自测复习的问答闪卡，`,
+      `数量根据内容多少自己判断（大约5~12张），问题和答案都用${langName}，答案要简洁但完整，不要只写一两个词。`,
+      `严格只输出一个 JSON 数组，格式为 [{"q":"问题","a":"答案"}]，不要输出任何解释、`,
+      "前后缀文字或 Markdown 代码块标记：",
+      "",
+      notesMarkdown,
+    ].join("\n");
+  }
+
+  /** 把 buildFlashcardsPrompt 对应的模型回复解析成 [{question, answer}]；格式不对的条目
+   * 直接丢弃，不让一张坏卡片拖累其它能用的卡片。 */
+  function parseFlashcardsResponse(responseText) {
+    const arr = extractJsonArray(responseText) || [];
+    return arr
+      .filter((it) => it && typeof it.q === "string" && it.q.trim() && typeof it.a === "string" && it.a.trim())
+      .map((it) => ({ question: it.q.trim(), answer: it.a.trim() }));
+  }
+
+  /** 构造"根据整理好的笔记正文出一份单选题测验"的提示词。 */
+  function buildQuizPrompt(notesMarkdown, langCode) {
+    const langName = languageName(langCode);
+    return [
+      `下面是一份${langName}课堂笔记。请出一份单选题小测验来检验对这份笔记内容的掌握程度，`,
+      `数量根据内容多少自己判断（大约5~10题），每题4个选项、只有一个正确答案，题目和选项都用${langName}。`,
+      `严格只输出一个 JSON 数组，格式为 [{"question":"题目","options":["选项A","选项B","选项C","选项D"],"correctIndex":0}]，`,
+      "correctIndex 是正确选项在 options 里的下标（从0开始），不要输出任何解释、前后缀文字或 Markdown 代码块标记：",
+      "",
+      notesMarkdown,
+    ].join("\n");
+  }
+
+  /** 把 buildQuizPrompt 对应的模型回复解析成 [{question, options, correctIndex}]；
+   * 校验 options 至少两项且都是非空字符串、correctIndex 是落在 options 范围内的整数，
+   * 不满足就丢弃这一题，不影响其它题目正常显示。 */
+  function parseQuizResponse(responseText) {
+    const arr = extractJsonArray(responseText) || [];
+    return arr
+      .filter(
+        (it) =>
+          it &&
+          typeof it.question === "string" &&
+          it.question.trim() &&
+          Array.isArray(it.options) &&
+          it.options.length >= 2 &&
+          it.options.every((o) => typeof o === "string" && o.trim()) &&
+          Number.isInteger(it.correctIndex) &&
+          it.correctIndex >= 0 &&
+          it.correctIndex < it.options.length
+      )
+      .map((it) => ({
+        question: it.question.trim(),
+        options: it.options.map((o) => o.trim()),
+        correctIndex: it.correctIndex,
+      }));
+  }
+
+  /** 构造"针对这条笔记向 AI 提问"的提示词：只根据笔记正文回答，笔记里没有的内容要求
+   * 如实说没提到而不是编造；history 是这条笔记之前的问答记录（不含刚问的这条），
+   * 让多轮追问能带上下文。 */
+  function buildQaPrompt(notesMarkdown, langCode, history, question) {
+    const langName = languageName(langCode);
+    const historyText = (history || [])
+      .map((m) => `${m.role === "user" ? "学生" : "助手"}：${m.text}`)
+      .join("\n");
+    return [
+      `下面是一份${langName}课堂笔记，请只根据这份笔记的内容回答学生的问题；如果问题超出笔记涉及的范围，`,
+      `要如实说笔记里没有提到，不要编造内容。回答请直接、简洁，用${langName}。`,
+      "",
+      "【课堂笔记】",
+      notesMarkdown,
+      historyText ? "\n【之前的问答】\n" + historyText : "",
+      "",
+      `【学生的新问题】\n${question}`,
+    ].join("\n");
+  }
+
   return {
     callClaude, extractText, aiClientError,
     languageName, formatSeconds, formatSegmentsForPrompt,
     buildTranslatePrompt, parseTranslateResponse, buildNotesPrompt,
+    buildFlashcardsPrompt, parseFlashcardsResponse,
+    buildQuizPrompt, parseQuizResponse,
+    buildQaPrompt,
     DEFAULT_MODEL,
   };
 });

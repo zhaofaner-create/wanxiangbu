@@ -9,6 +9,11 @@ const {
   buildTranslatePrompt,
   parseTranslateResponse,
   buildNotesPrompt,
+  buildFlashcardsPrompt,
+  parseFlashcardsResponse,
+  buildQuizPrompt,
+  parseQuizResponse,
+  buildQaPrompt,
   DEFAULT_MODEL,
 } = require("../js/aiClient.js");
 
@@ -124,6 +129,96 @@ describe("buildNotesPrompt", () => {
     assert.match(prompt, /中文/);
     assert.match(prompt, /\[00:00→00:05\] Bonjour à tous/);
     assert.match(prompt, /Markdown/);
+  });
+});
+
+describe("buildFlashcardsPrompt", () => {
+  test("包含笔记语言名称、笔记正文，并要求输出 JSON", () => {
+    const prompt = buildFlashcardsPrompt("# 标题\n正文内容", "zh");
+    assert.match(prompt, /中文/);
+    assert.match(prompt, /# 标题\n正文内容/);
+    assert.match(prompt, /JSON/);
+  });
+});
+
+describe("parseFlashcardsResponse", () => {
+  test("正常解析出 JSON 数组里的问答对", () => {
+    const cards = parseFlashcardsResponse('[{"q":"问题1","a":"答案1"},{"q":"问题2","a":"答案2"}]');
+    assert.deepEqual(cards, [
+      { question: "问题1", answer: "答案1" },
+      { question: "问题2", answer: "答案2" },
+    ]);
+  });
+
+  test("模型在 JSON 前后夹带解释文字，也能提取出中间的数组", () => {
+    const cards = parseFlashcardsResponse('好的，这是闪卡：\n[{"q":"问题","a":"答案"}]\n希望有帮助。');
+    assert.deepEqual(cards, [{ question: "问题", answer: "答案" }]);
+  });
+
+  test("过滤掉缺少 q 或 a、或者是空字符串的条目，不影响其它能用的条目", () => {
+    const cards = parseFlashcardsResponse('[{"q":"","a":"答案"},{"q":"问题"},{"q":"好的","a":"OK"}]');
+    assert.deepEqual(cards, [{ question: "好的", answer: "OK" }]);
+  });
+
+  test("完全不是 JSON、或者解析失败时返回空数组，不抛错", () => {
+    assert.deepEqual(parseFlashcardsResponse("这不是JSON"), []);
+    assert.deepEqual(parseFlashcardsResponse(""), []);
+    assert.deepEqual(parseFlashcardsResponse(undefined), []);
+  });
+});
+
+describe("buildQuizPrompt", () => {
+  test("包含笔记语言名称、笔记正文，并要求输出 JSON", () => {
+    const prompt = buildQuizPrompt("# 标题\n正文内容", "fr");
+    assert.match(prompt, /法语/);
+    assert.match(prompt, /# 标题\n正文内容/);
+    assert.match(prompt, /correctIndex/);
+  });
+});
+
+describe("parseQuizResponse", () => {
+  test("正常解析出题目、选项和正确下标", () => {
+    const quiz = parseQuizResponse('[{"question":"1+1=?","options":["1","2","3","4"],"correctIndex":1}]');
+    assert.deepEqual(quiz, [{ question: "1+1=?", options: ["1", "2", "3", "4"], correctIndex: 1 }]);
+  });
+
+  test("correctIndex 超出 options 范围、不是整数、或 options 少于两项，都丢弃这一题", () => {
+    const quiz = parseQuizResponse(JSON.stringify([
+      { question: "q1", options: ["a", "b"], correctIndex: 5 },
+      { question: "q2", options: ["a", "b"], correctIndex: 0.5 },
+      { question: "q3", options: ["a"], correctIndex: 0 },
+      { question: "q4", options: ["a", "b"], correctIndex: 1 },
+    ]));
+    assert.deepEqual(quiz, [{ question: "q4", options: ["a", "b"], correctIndex: 1 }]);
+  });
+
+  test("options 里有非字符串或空字符串也丢弃这一题", () => {
+    const quiz = parseQuizResponse(JSON.stringify([{ question: "q1", options: ["a", ""], correctIndex: 0 }]));
+    assert.deepEqual(quiz, []);
+  });
+
+  test("完全不是 JSON 时返回空数组，不抛错", () => {
+    assert.deepEqual(parseQuizResponse("不是JSON"), []);
+  });
+});
+
+describe("buildQaPrompt", () => {
+  test("包含笔记正文、新问题，没有历史记录时不出现「之前的问答」段落", () => {
+    const prompt = buildQaPrompt("笔记正文", "zh", [], "这是什么意思？");
+    assert.match(prompt, /笔记正文/);
+    assert.match(prompt, /这是什么意思？/);
+    assert.doesNotMatch(prompt, /之前的问答/);
+  });
+
+  test("带历史记录时，按学生/助手拼接进提示词", () => {
+    const prompt = buildQaPrompt("笔记正文", "zh", [
+      { role: "user", text: "第一个问题" },
+      { role: "assistant", text: "第一个回答" },
+    ], "追问一下");
+    assert.match(prompt, /之前的问答/);
+    assert.match(prompt, /学生：第一个问题/);
+    assert.match(prompt, /助手：第一个回答/);
+    assert.match(prompt, /追问一下/);
   });
 });
 

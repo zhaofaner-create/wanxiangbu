@@ -45,6 +45,10 @@
   let activeTranslationLang = null;
   const NOTES_SOURCE_KEY = "__source__"; // "笔记"tab 语言切换里代表"原文"（sourceLang）的那个选项，不是真的语言代码
   let activeNotesLang = NOTES_SOURCE_KEY; // "笔记"tab 当前查看的是原文还是翻译成了哪个目标语言
+  let flashcardIndex = 0; // "闪卡"tab 当前看到第几张（下标）
+  let flashcardFlipped = false; // 当前这张卡片是不是已经翻到答案那面
+  let qaBusy = false; // "提问"tab 上一次提问是不是还没等到 AI 回复
+  let qaError = null; // "提问"tab 上一次提问失败的提示（成功一次或换问题重新问都会清空）
   let recorder = null; // 当前活跃的 speechRecorder 实例；非空表示正在录音（含暂停）
   let recordingNoteId = null; // recorder 对应的笔记 id
   let recordStartError = null; // 启动失败（不支持/没权限）时的提示
@@ -416,6 +420,10 @@
     detailTab = "transcript";
     activeTranslationLang = note.targetLangs[0] || null;
     activeNotesLang = NOTES_SOURCE_KEY;
+    flashcardIndex = 0;
+    flashcardFlipped = false;
+    qaBusy = false;
+    qaError = null;
     rerender();
   }
 
@@ -873,9 +881,263 @@
       return h("div", {}, [langSeg ? langSeg.el : null, bodySlot]);
     }
 
+    // ---------- 闪卡 / 测验 / 提问：都是在"笔记"tab 生成好的 notesMarkdown 基础上
+    // 再让 AI 加工一次，所以三个 tab 都要求先有 notesMarkdown，没有的话只显示提示，
+    // 不出现"生成"按钮——跟"笔记"tab 里翻译子 tab 的 gating 是同一个道理。 ----------
+
+    function renderFlashcardsTab() {
+      const cards = note.flashcards || [];
+      const statusEl = h(
+        "div", { class: "muted", style: "font-size:12px;margin:6px 0 10px;" },
+        !note.notesMarkdown
+          ? "先在「笔记」tab 生成笔记，才能生成闪卡"
+          : hasClaudeKey ? "" : "还没设置 AI 服务密钥，去「数据与设置」填一个才能用这个功能"
+      );
+
+      async function generateFlashcards() {
+        genBtn.disabled = true;
+        const prevLabel = genBtn.textContent;
+        genBtn.textContent = "生成中…";
+        statusEl.textContent = "AI 正在根据笔记生成闪卡，可能需要几秒到十几秒…";
+        try {
+          const text = await aiClient.callClaude({
+            apiKey: store.getSettings().claudeApiKey,
+            system: "你是一个帮学生制作复习闪卡的助手，只输出要求的 JSON，不要输出任何多余的解释。",
+            prompt: aiClient.buildFlashcardsPrompt(note.notesMarkdown, note.sourceLang),
+          });
+          const parsed = aiClient.parseFlashcardsResponse(text);
+          if (!parsed.length) throw aiClient.aiClientError("AI 没有生成出可用的闪卡，请重试一次", "empty_response");
+          store.setClassNoteFlashcards(note.id, parsed);
+          flashcardIndex = 0;
+          flashcardFlipped = false;
+          rerender();
+        } catch (err) {
+          genBtn.disabled = false;
+          genBtn.textContent = prevLabel;
+          statusEl.textContent = err.message || "生成闪卡失败";
+        }
+      }
+
+      const genBtn = h(
+        "button",
+        {
+          class: "btn btn-primary", type: "button",
+          disabled: !hasClaudeKey || !note.notesMarkdown || undefined,
+          onClick: generateFlashcards,
+        },
+        cards.length ? "重新生成闪卡" : "生成闪卡"
+      );
+
+      if (!cards.length) {
+        return h("div", {}, [
+          h("div", { class: "section-row", style: "justify-content:flex-end;" }, [genBtn]),
+          statusEl,
+          h("div", { class: "empty-hint" }, "还没有闪卡"),
+        ]);
+      }
+
+      if (flashcardIndex >= cards.length) flashcardIndex = 0;
+      const card = cards[flashcardIndex];
+
+      return h("div", {}, [
+        h("div", { class: "section-row", style: "justify-content:flex-end;" }, [genBtn]),
+        statusEl,
+        h(
+          "div",
+          {
+            class: "card flashcard-card", style: "cursor:pointer;",
+            onClick: () => { flashcardFlipped = !flashcardFlipped; rerender(); },
+          },
+          [
+            h("div", { class: "muted", style: "font-size:11px;" }, "问题"),
+            h("div", { style: "margin-top:8px;font-size:14px;font-weight:600;" }, card.question),
+            flashcardFlipped
+              ? h("div", { style: "margin-top:16px;padding-top:12px;border-top:1px dashed var(--g-hairline);" }, [
+                  h("div", { class: "muted", style: "font-size:11px;" }, "答案"),
+                  h("div", { style: "margin-top:8px;font-size:14px;" }, card.answer),
+                ])
+              : h("div", { class: "muted", style: "margin-top:16px;font-size:12px;" }, "点击卡片查看答案"),
+          ]
+        ),
+        h("div", { class: "section-row", style: "justify-content:space-between;align-items:center;margin-top:10px;" }, [
+          h(
+            "button",
+            {
+              class: "btn btn-outline btn-sm", type: "button",
+              disabled: flashcardIndex === 0 || undefined,
+              onClick: (e) => { e.stopPropagation(); flashcardIndex -= 1; flashcardFlipped = false; rerender(); },
+            },
+            "← 上一张"
+          ),
+          h("span", { class: "muted", style: "font-size:12px;" }, `${flashcardIndex + 1} / ${cards.length}`),
+          h(
+            "button",
+            {
+              class: "btn btn-outline btn-sm", type: "button",
+              disabled: flashcardIndex >= cards.length - 1 || undefined,
+              onClick: (e) => { e.stopPropagation(); flashcardIndex += 1; flashcardFlipped = false; rerender(); },
+            },
+            "下一张 →"
+          ),
+        ]),
+      ]);
+    }
+
+    function renderQuizTab() {
+      const quiz = note.quiz || [];
+      const statusEl = h(
+        "div", { class: "muted", style: "font-size:12px;margin:6px 0 10px;" },
+        !note.notesMarkdown
+          ? "先在「笔记」tab 生成笔记，才能生成测验"
+          : hasClaudeKey ? "" : "还没设置 AI 服务密钥，去「数据与设置」填一个才能用这个功能"
+      );
+
+      async function generateQuiz() {
+        genBtn.disabled = true;
+        const prevLabel = genBtn.textContent;
+        genBtn.textContent = "生成中…";
+        statusEl.textContent = "AI 正在根据笔记生成测验题，可能需要几秒到十几秒…";
+        try {
+          const text = await aiClient.callClaude({
+            apiKey: store.getSettings().claudeApiKey,
+            system: "你是一个帮学生出复习测验题的助手，只输出要求的 JSON，不要输出任何多余的解释。",
+            prompt: aiClient.buildQuizPrompt(note.notesMarkdown, note.sourceLang),
+          });
+          const parsed = aiClient.parseQuizResponse(text);
+          if (!parsed.length) throw aiClient.aiClientError("AI 没有生成出可用的测验题，请重试一次", "empty_response");
+          store.setClassNoteQuiz(note.id, parsed);
+          rerender();
+        } catch (err) {
+          genBtn.disabled = false;
+          genBtn.textContent = prevLabel;
+          statusEl.textContent = err.message || "生成测验失败";
+        }
+      }
+
+      const genBtn = h(
+        "button",
+        {
+          class: "btn btn-primary", type: "button",
+          disabled: !hasClaudeKey || !note.notesMarkdown || undefined,
+          onClick: generateQuiz,
+        },
+        quiz.length ? "重新生成测验" : "生成测验"
+      );
+
+      if (!quiz.length) {
+        return h("div", {}, [
+          h("div", { class: "section-row", style: "justify-content:flex-end;" }, [genBtn]),
+          statusEl,
+          h("div", { class: "empty-hint" }, "还没有测验题"),
+        ]);
+      }
+
+      // 还没作答（selectedIndex 是 null）时选项都是普通样式；选完之后正确选项标绿、
+      // 选错了的那个标红，其它选项（包括正确答案不是自己选的那个）保持普通样式不变，
+      // 跟截图里参考应用的效果一致。允许重新点别的选项改答案，直接覆盖上一次的记录。
+      function optionClass(q, optIndex) {
+        if (q.selectedIndex === null || q.selectedIndex === undefined) return "quiz-option";
+        if (optIndex === q.correctIndex) return "quiz-option quiz-option-correct";
+        if (optIndex === q.selectedIndex) return "quiz-option quiz-option-wrong";
+        return "quiz-option";
+      }
+
+      const questionCards = quiz.map((q, qi) =>
+        h("div", { class: "card", style: "margin-bottom:10px;" }, [
+          h("div", { style: "font-size:13.5px;font-weight:600;margin-bottom:10px;" }, `${qi + 1}. ${q.question}`),
+          h(
+            "div", { style: "display:flex;flex-direction:column;gap:8px;" },
+            q.options.map((opt, oi) =>
+              h(
+                "button",
+                {
+                  type: "button",
+                  class: optionClass(q, oi),
+                  onClick: () => { store.setClassNoteQuizAnswer(note.id, qi, oi); rerender(); },
+                },
+                opt
+              )
+            )
+          ),
+        ])
+      );
+
+      return h("div", {}, [
+        h("div", { class: "section-row", style: "justify-content:flex-end;" }, [genBtn]),
+        statusEl,
+        h("div", {}, questionCards),
+      ]);
+    }
+
+    function renderQaTab() {
+      const messages = note.qaMessages || [];
+      const disabledReason = !note.notesMarkdown
+        ? "先在「笔记」tab 生成笔记，才能提问"
+        : hasClaudeKey ? "" : "还没设置 AI 服务密钥，去「数据与设置」填一个才能用这个功能";
+      const statusEl = h("div", { class: "muted", style: "font-size:12px;margin:6px 0 10px;" }, disabledReason);
+      const canAsk = Boolean(note.notesMarkdown) && hasClaudeKey;
+
+      const inputEl = h("input", {
+        class: "field-input", type: "text", placeholder: "问一个关于这条笔记的问题…",
+        disabled: !canAsk || qaBusy || undefined,
+      });
+
+      async function sendQuestion() {
+        const question = inputEl.value.trim();
+        if (!question || qaBusy || !canAsk) return;
+        inputEl.value = "";
+        store.addClassNoteQaMessage(note.id, "user", question);
+        qaBusy = true;
+        qaError = null;
+        rerender();
+        try {
+          // 不含刚存进去的这条提问本身——buildQaPrompt 会把它作为"新问题"单独放在
+          // 提示词最后，这里的 history 只是"这条之前"的历史，避免重复出现两遍。
+          const history = (note.qaMessages || []).slice(0, -1);
+          const answer = await aiClient.callClaude({
+            apiKey: store.getSettings().claudeApiKey,
+            system: "你是一个帮学生复习课堂笔记的助手，只根据提供的课堂笔记内容回答问题，笔记里没有的内容要如实说没有提到，不要编造。",
+            prompt: aiClient.buildQaPrompt(note.notesMarkdown, note.sourceLang, history, question),
+          });
+          store.addClassNoteQaMessage(note.id, "assistant", answer);
+        } catch (err) {
+          qaError = err.message || "提问失败";
+        }
+        qaBusy = false;
+        rerender();
+      }
+
+      inputEl.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") sendQuestion();
+      });
+
+      const sendBtn = h(
+        "button",
+        { class: "btn btn-primary btn-sm", type: "button", disabled: !canAsk || qaBusy || undefined, onClick: sendQuestion },
+        qaBusy ? "思考中…" : "发送"
+      );
+
+      return h("div", {}, [
+        statusEl,
+        h(
+          "div", { class: "card qa-messages" },
+          messages.length
+            ? messages.map((m) =>
+                h("div", { class: m.role === "user" ? "qa-bubble qa-bubble-user" : "qa-bubble qa-bubble-assistant" }, m.text)
+              )
+            : [h("div", { class: "empty-hint" }, "还没有提问，问一个关于这条笔记的问题试试")]
+        ),
+        qaError ? h("div", { style: "color:hsl(4,70%,55%);font-size:12px;margin-top:6px;" }, qaError) : null,
+        h("div", { class: "section-row", style: "margin-top:10px;" }, [inputEl, sendBtn]),
+      ]);
+    }
+
     const contentSlot = h("div", { style: "margin-top:14px;" });
     function buildTabContent() {
       if (detailTab === "transcript") return renderTranscriptTab();
+      if (detailTab === "flashcards") return renderFlashcardsTab();
+      if (detailTab === "quiz") return renderQuizTab();
+      if (detailTab === "qa") return renderQaTab();
       return renderNotesTab();
     }
     function refreshTabContent() {
@@ -888,6 +1150,9 @@
       options: [
         { key: "notes", label: "笔记" },
         { key: "transcript", label: "转录" },
+        { key: "flashcards", label: "闪卡" },
+        { key: "quiz", label: "测验" },
+        { key: "qa", label: "提问" },
       ],
       activeKey: detailTab,
       onSelect: (key) => {
@@ -982,6 +1247,10 @@
             detailTab = "notes";
             activeTranslationLang = note.targetLangs[0] || null;
             activeNotesLang = NOTES_SOURCE_KEY;
+            flashcardIndex = 0;
+            flashcardFlipped = false;
+            qaBusy = false;
+            qaError = null;
             rerender();
           },
         },

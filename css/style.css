@@ -962,3 +962,22 @@ table.data-table th { background: rgba(255,255,255,0.5); font-weight: 700; color
   border-left: 2px solid var(--g-hairline); color: var(--text-secondary); font-size: 13px;
 }
 .segment-translation:empty { display: none; }
+
+/* ---------- 课堂笔记模块：闪卡 / 测验 / 提问（都是在整理好的笔记基础上再加工一次） ---------- */
+
+.flashcard-card { min-height: 120px; text-align: center; user-select: none; }
+
+.quiz-option {
+  display: block; width: 100%; text-align: left; padding: 10px 14px;
+  border-radius: var(--radius-sm); border: 1px solid var(--g-hairline);
+  background: var(--g-tint-clear); color: var(--text-primary); font-size: 13.5px;
+  font-family: inherit; cursor: pointer; transition: background 0.15s ease, border-color 0.15s ease;
+}
+.quiz-option:hover { background: var(--g-tint-clear-strong); }
+.quiz-option-correct { background: var(--success-soft); border-color: var(--success); color: var(--success); font-weight: 600; }
+.quiz-option-wrong { background: var(--danger-soft); border-color: var(--danger); color: var(--danger); font-weight: 600; }
+
+.qa-messages { display: flex; flex-direction: column; gap: 10px; min-height: 60px; }
+.qa-bubble { max-width: 88%; padding: 8px 12px; border-radius: 12px; font-size: 13.5px; line-height: 1.6; white-space: pre-wrap; }
+.qa-bubble-user { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
+.qa-bubble-assistant { align-self: flex-start; background: var(--g-tint-clear-strong); color: var(--text-primary); border-bottom-left-radius: 4px; }
