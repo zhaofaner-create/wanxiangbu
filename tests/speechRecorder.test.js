@@ -154,6 +154,20 @@ describe("start", () => {
     assert.equal(FakeRecognition.instances[0].lang, "fr-FR");
   });
 
+  test("申请麦克风时关掉回声消除/降噪/自动增益，避免把教室里非人声的声音当噪音压掉", async () => {
+    let capturedConstraints = null;
+    const { recorder } = makeRecorder({
+      getUserMediaImpl: async (constraints) => {
+        capturedConstraints = constraints;
+        return new FakeStream();
+      },
+    });
+    await recorder.start();
+    assert.deepEqual(capturedConstraints, {
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+    });
+  });
+
   test("挑选浏览器支持的录音格式传给 MediaRecorder", async () => {
     const { recorder } = makeRecorder();
     await recorder.start();

@@ -348,18 +348,18 @@ describe("课堂笔记：AI 整理笔记", () => {
   });
 });
 
-describe("课堂笔记：多语言互译", () => {
+describe("课堂笔记：多语言互译（转录 tab 里原文+译文合并显示，不再单独分翻译 tab）", () => {
   test("没有配置当前使用的翻译服务时，翻译按钮禁用并提示去设置", async () => {
     await startNewRecording(page, { title: "没配置翻译服务的笔记", targetLangLabel: "中文" });
     await page.evaluate(() => window.__emitTranscript("Bonjour à tous", true));
     await page.locator("button", { hasText: "结束录音" }).click();
-    await page.locator(".tabs .tab-btn", { hasText: "翻译" }).click();
+    // 结束录音后默认就停在"转录" tab，不需要再点别的 tab。
     await assert.doesNotReject(page.locator(".content-area", { hasText: "还没配置当前使用的翻译服务" }).first().waitFor());
     assert.match(await page.locator(".content-area").innerText(), /Google 翻译/);
     assert.equal(await page.locator("button", { hasText: "翻译成中文" }).isDisabled(), true);
   });
 
-  test("默认用 Google 翻译：结束录音时会自动补翻还没翻译的内容，不需要手动点按钮", async () => {
+  test("默认用 Google 翻译：结束录音时会自动补翻还没翻译的内容，原文译文同一个格子里", async () => {
     await setTranslationProvider(page, "google", { apiKey: "google-test-key" });
     await startNewRecording(page, { title: "互译测试", targetLangLabel: "中文" });
     // 提前把接口挡住，避免"结束录音"触发的自动翻译请求真的发出去打到公网。
@@ -368,10 +368,10 @@ describe("课堂笔记：多语言互译", () => {
     await assert.doesNotReject(page.locator(".record-transcript-list", { hasText: "Bonjour à tous" }).waitFor());
     await page.locator("button", { hasText: "结束录音" }).click();
 
-    // 不点"翻译"tab 里的任何按钮：结束录音本身就会把还没翻译的内容自动补翻一次。
-    await page.locator(".tabs .tab-btn", { hasText: "翻译" }).click();
-    await assert.doesNotReject(page.locator(".pill", { hasText: "中文" }).waitFor());
-    await assert.doesNotReject(page.locator(".content-area", { hasText: "大家好" }).waitFor());
+    // 不点任何按钮：结束录音本身就会把还没翻译的内容自动补翻一次；原文和译文应该都在
+    // 详情页"转录"tab 的同一个格子里，不需要切去别的地方看。
+    await assert.doesNotReject(page.locator(".content-area", { hasText: "Bonjour à tous" }).waitFor());
+    await assert.doesNotReject(page.locator(".content-area .segment-translation", { hasText: "大家好" }).waitFor());
     // 已经翻完了，按钮应该显示"已翻译到最新"并禁用，而不是还停在"翻译成中文"。
     await assert.doesNotReject(page.locator("button", { hasText: "已翻译到最新" }).waitFor());
   });
@@ -384,13 +384,12 @@ describe("课堂笔记：多语言互译", () => {
     await assert.doesNotReject(page.locator(".record-transcript-list", { hasText: "你好，大家好" }).waitFor());
     await page.locator("button", { hasText: "结束录音" }).click();
 
-    await page.locator(".tabs .tab-btn", { hasText: "翻译" }).click();
-    await assert.doesNotReject(page.locator(".content-area", { hasText: "Hello everyone" }).waitFor());
+    await assert.doesNotReject(page.locator(".content-area .segment-translation", { hasText: "Hello everyone" }).waitFor());
 
     // 换一家服务商之后，点"全部重新翻译"应该整段重新翻译（走 setClassNoteTranslation 整段替换）。
     await mockTranslateApi(page, "azure", "Hi everyone (redo)");
     await page.locator("button", { hasText: "全部重新翻译" }).click();
-    await assert.doesNotReject(page.locator(".content-area", { hasText: "Hi everyone (redo)" }).waitFor());
+    await assert.doesNotReject(page.locator(".content-area .segment-translation", { hasText: "Hi everyone (redo)" }).waitFor());
   });
 
   test("切到 DeepL 之后翻译报错（密钥无效）时，显示错误提示且不清空原有内容", async () => {
@@ -415,23 +414,25 @@ describe("课堂笔记：多语言互译", () => {
       });
     });
 
-    await page.locator(".tabs .tab-btn", { hasText: "翻译" }).click();
     await page.locator("button", { hasText: "翻译成英语" }).click();
     await assert.doesNotReject(page.locator(".content-area", { hasText: "DeepL 密钥无效或没有权限" }).first().waitFor());
   });
 
-  test("创建时没选互译语言，翻译 tab 提示没有可互译的语言", async () => {
+  test("创建时没选互译语言，转录 tab 只显示原文，没有任何翻译相关的按钮或格子", async () => {
     await startNewRecording(page, { title: "没选语言测试" });
+    await page.evaluate(() => window.__emitTranscript("Bonjour", true));
     await page.locator("button", { hasText: "结束录音" }).click();
-    await page.locator(".tabs .tab-btn", { hasText: "翻译" }).click();
-    await assert.doesNotReject(page.locator(".empty-hint", { hasText: "没有选择需要互译的语言" }).waitFor());
+    await assert.doesNotReject(page.locator(".content-area", { hasText: "Bonjour" }).waitFor());
+    assert.equal(await page.locator(".segment-translation").count(), 0);
+    assert.equal(await page.locator("button", { hasText: "翻译" }).count(), 0);
   });
 });
 
 // 这是给"上课用"这个场景设计的核心功能：老师讲课的三小时里，用户不应该需要一直手动点
-// 翻译按钮——每隔几秒会自动把新说的这一小段发去翻译、直接显示在录音页的"实时翻译"面板里。
+// 翻译按钮——每隔几秒会自动把新说的这一小段发去翻译，直接接在原文那一格下面显示（用户
+// 明确要求原文和译文"在同一个格子里"，不要分成两块并排的区域）。
 describe("课堂笔记：录音过程中自动实时翻译（不需要手动点按钮）", () => {
-  test("配置好翻译服务、选了互译语言时，录音过程中新增的转录会自动翻译并显示在实时翻译面板里", async () => {
+  test("配置好翻译服务、选了互译语言时，录音过程中新增的转录会自动翻译并接在原文下面同一格里", async () => {
     await setTranslationProvider(page, "google", { apiKey: "google-test-key" });
     await mockTranslateApi(page, "google", "大家好");
     await startNewRecording(page, { title: "自动翻译课堂测试", targetLangLabel: "中文" });
@@ -439,27 +440,24 @@ describe("课堂笔记：录音过程中自动实时翻译（不需要手动点�
     await page.evaluate(() => window.__emitTranscript("Bonjour à tous", true));
     await assert.doesNotReject(page.locator(".record-transcript-list", { hasText: "Bonjour à tous" }).waitFor());
 
-    // 全程不点任何按钮——只是等待自动翻译的间隔过去，"实时翻译"面板里应该会自己冒出翻译结果。
-    const translationPanel = page.locator(".card", { hasText: "实时翻译" });
-    await assert.doesNotReject(translationPanel.waitFor());
+    // 全程不点任何按钮——只是等待自动翻译的间隔过去，译文应该直接出现在原文那一格下面。
     await assert.doesNotReject(
-      translationPanel.locator(".record-transcript-list", { hasText: "大家好" }).waitFor({ timeout: 15000 })
+      page.locator(".record-transcript-list .segment-translation", { hasText: "大家好" }).waitFor({ timeout: 15000 })
     );
 
-    // 结束录音后，"翻译"tab 里也应该已经是最新的，不需要再手动点一次。
+    // 结束录音后，详情页也应该已经是最新的，不需要再手动翻一次。
     await page.locator("button", { hasText: "结束录音" }).click();
-    await page.locator(".tabs .tab-btn", { hasText: "翻译" }).click();
     await assert.doesNotReject(page.locator(".content-area", { hasText: "大家好" }).waitFor());
   });
 
-  test("选了互译语言但还没配置翻译服务时，录音页照常显示实时转录，翻译面板提示去配置、不会报错", async () => {
+  test("选了互译语言但还没配置翻译服务时，录音页照常显示实时转录，提示去配置、不会报错", async () => {
     await startNewRecording(page, { title: "没配置服务的自动翻译测试", targetLangLabel: "英语" });
     await page.evaluate(() => window.__emitTranscript("你好，大家好", true));
     await assert.doesNotReject(page.locator(".record-transcript-list", { hasText: "你好，大家好" }).waitFor());
 
-    const translationPanel = page.locator(".card", { hasText: "实时翻译" });
-    await assert.doesNotReject(translationPanel.waitFor());
-    assert.match(await translationPanel.innerText(), /还没配置当前使用的翻译服务/);
+    const recordCard = page.locator(".card", { hasText: "实时转录" });
+    await assert.doesNotReject(recordCard.waitFor());
+    assert.match(await recordCard.innerText(), /还没配置当前使用的翻译服务/);
 
     await page.locator("button", { hasText: "结束录音" }).click();
     await assert.doesNotReject(page.locator(".tabs", { hasText: "转录" }).waitFor());

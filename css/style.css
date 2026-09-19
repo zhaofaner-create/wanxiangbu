@@ -954,3 +954,11 @@ table.data-table th { background: rgba(255,255,255,0.5); font-weight: 700; color
 .record-caption { min-height: 20px; margin-top: 8px; padding-top: 8px; font-size: 13px; color: var(--text-muted); font-style: italic; border-top: 1px dashed var(--g-hairline); }
 .record-transcript-list { max-height: 360px; overflow-y: auto; }
 .record-transcript-list:empty::before { content: "还没有转录内容，开始说话后会实时出现在这里"; color: var(--text-muted); font-size: 13px; }
+/* 原文+译文合并成"一格"：译文缩进对齐在原文文字下面（44px 时间戳列 + 10px 间距），
+   左边一条竖线跟笔记markdown里的引用块（.note-md-quote）是同一个视觉语言。还没翻译出来
+   之前这一格是空的，:empty 直接隐藏，不占地方、也不会露出一条突兀的空竖线。 */
+.segment-translation {
+  margin: 6px 0 8px 54px; padding: 2px 0 2px 10px;
+  border-left: 2px solid var(--g-hairline); color: var(--text-secondary); font-size: 13px;
+}
+.segment-translation:empty { display: none; }

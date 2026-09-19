@@ -163,7 +163,15 @@
       }
 
       try {
-        mediaStream = await getUserMediaImpl({ audio: true });
+        // 关掉 Chrome 默认打开的回声消除/降噪/自动增益——这几个是给"视频通话只要听清
+        // 说话人"这种场景设计的，会把不像"近距离人声"的声音（比如手机放的视频、教室里
+        // 稍远一点的声音）当成噪音/回声压掉，导致保存下来的录音会漏内容。课堂录音要的是
+        // "教室里发生的一切都录下来"，不是干净的人声通话，所以这三项全部关掉；这个设置
+        // 只影响这里保存音频用的这路采集，跟旁边 SpeechRecognition 自己内部的语音识别
+        // 采集是两条独立的通道，不会影响转录准确度。
+        mediaStream = await getUserMediaImpl({
+          audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+        });
       } catch {
         throw recorderError("没有获得麦克风权限，请在浏览器设置里允许后重试", "permission");
       }
