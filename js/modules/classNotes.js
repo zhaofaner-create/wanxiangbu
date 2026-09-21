@@ -17,13 +17,15 @@
   const { createSegmented } = require("../components/segmented.js");
   const { openFormModal } = require("../components/modal.js");
   const { createSpeechRecorder } = require("../components/speechRecorder.js");
-  const { saveAudio, deleteAudio, makeAudioKey } = require("../components/audioStore.js");
+  const { saveAudio, loadAudio, deleteAudio, makeAudioKey } = require("../components/audioStore.js");
   const { saveMaterialImage, loadMaterialImage, deleteMaterialImage, makeMaterialKey } = require("../components/materialsStore.js");
   const { extractPptxText } = require("../components/pptxText.js");
+  const { extractDocxText } = require("../components/docxText.js");
   const { renderMindMapSvg } = require("../components/mindMap.js");
   const { parseMarkdownBlocks, parseInlineSegments } = require("../components/markdown.js");
   const aiClient = require("../aiClient.js");
   const translationProviders = require("../translationProviders.js");
+  const speechToTextProviders = require("../components/speechToTextProviders.js");
 
   const meta = { id: "classNotes", label: "课堂笔记", title: "课堂笔记", subtitle: "录音转文字 · 多语言互译 · AI整理笔记" };
 
@@ -35,15 +37,13 @@
   // 这些都是本模块特有的联网点，跟 App 其它模块的"完全离线"不一样，README 里有对应说明。
 
   // Web Speech API 认的是 BCP-47 语言标签（比如 "fr-FR"），跟 store.js 里
-  // CLASS_NOTE_LANGUAGES 用的两位 ISO 代码不是一回事，这里做个映射。
-  const SPEECH_LANG_TAGS = {
-    zh: "zh-CN", en: "en-US", fr: "fr-FR", es: "es-ES", de: "de-DE",
-    ja: "ja-JP", ko: "ko-KR", ru: "ru-RU", pt: "pt-PT", it: "it-IT",
-  };
+  // CLASS_NOTE_LANGUAGES 用的两位 ISO 代码不是一回事，这个映射表跟"整体重新识别"
+  // 用的云端语音识别接口是同一份，统一维护在 speechToTextProviders.js 里。
+  const SPEECH_LANG_TAGS = speechToTextProviders.SPEECH_LANG_TAGS;
 
   // ---------- 模块级状态：跟 readingNotes.js 的 activeFilter、todayPlan.js 的
   // completedOpen/tickTimer 是一回事，靠闭包跨多次 render 保持住，不存进 store。 ----------
-  let view = { mode: "list" }; // {mode:"list"} | {mode:"record", noteId:string} | {mode:"detail", noteId:string}
+  let view = { mode: "list" }; // {mode:"list"}（课程总览） | {mode:"courseNotes", courseId:string|null}（某门课/"未分类"的笔记列表） | {mode:"record", noteId:string} | {mode:"detail", noteId:string}
   let detailTab = "notes"; // "notes" | "transcript"（"转录" tab 现在原文+译文一起显示，不再单独分"翻译" tab）
   let activeTranslationLang = null;
   const NOTES_SOURCE_KEY = "__source__"; // "笔记"tab 语言切换里代表"原文"（sourceLang）的那个选项，不是真的语言代码
@@ -52,6 +52,11 @@
   let flashcardFlipped = false; // 当前这张卡片是不是已经翻到答案那面
   let qaBusy = false; // "提问"tab 上一次提问是不是还没等到 AI 回复
   let qaError = null; // "提问"tab 上一次提问失败的提示（成功一次或换问题重新问都会清空）
+  let transcriptViewMode = "live"; // "转录"tab 里"实时识别"/"重新识别"两份内容当前切换看的是哪个
+  let retranscriptActiveLang = null; // "重新识别"这份内容当前查看哪个目标语言译文（跟实时识别的 activeTranslationLang 分开存）
+  let retranscribeBusy = false; // 上一次"整体重新识别"是不是还没跑完
+  let retranscribeProgress = null; // 整体重新识别进行中的进度 {index, total}（按音频切出来的段数算）
+  let retranscribeError = null; // 上一次整体重新识别失败的提示，重新点一次就会清空
   let recorder = null; // 当前活跃的 speechRecorder 实例；非空表示正在录音（含暂停）
   let recordingNoteId = null; // recorder 对应的笔记 id
   let recordStartError = null; // 启动失败（不支持/没权限）时的提示
@@ -83,6 +88,17 @@
   function providerLabel(store, code) {
     const item = store.TRANSLATION_PROVIDER_OPTIONS.find((p) => p.code === code);
     return item ? item.label : code;
+  }
+
+  function sttProviderLabel(store, code) {
+    const item = store.STT_PROVIDER_OPTIONS.find((p) => p.code === code);
+    return item ? item.label : code;
+  }
+
+  function materialIcon(kind) {
+    if (kind === "pptx") return "📑";
+    if (kind === "docx") return "📄";
+    return "🖼️";
   }
 
   /** 把 settings 里三家翻译服务各自的字段收拢成 translationProviders.js 认的 keys 形状。 */
@@ -235,6 +251,22 @@
     return { block, translationEl };
   }
 
+  // 录音页"实时转录"面板固定了高度、超出会滚动（见 style.css .record-transcript-list），
+  // 但内容一直往后加时浏览器不会自己跟着滚下去——用户反馈"一直停在最上面不动"就是这个。
+  // 这两个小工具：只有用户本来就停留在（接近）底部时才自动帮他滚到新内容，如果他特意往上
+  // 滚去看前面讲的内容，就不要每来一句新的就把他强行拽回底部。
+  const SCROLL_NEAR_BOTTOM_PX = 48;
+
+  function isScrollNearBottom(el) {
+    if (!el) return true;
+    return el.scrollHeight - el.scrollTop - el.clientHeight <= SCROLL_NEAR_BOTTOM_PX;
+  }
+
+  function scrollToBottom(el) {
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }
+
   /** 把 base64 数据从 Blob 里读出来（去掉 "data:image/png;base64," 这个前缀，只留
    * Anthropic API 要的纯 base64 正文）。 */
   function blobToBase64(blob) {
@@ -263,6 +295,8 @@
     for (const m of materials) {
       if (m.kind === "pptx") {
         if (m.extractedText) textParts.push(`【PPT：${m.name || "未命名"}】\n${m.extractedText}`);
+      } else if (m.kind === "docx") {
+        if (m.extractedText) textParts.push(`【Word 文档：${m.name || "未命名"}】\n${m.extractedText}`);
       } else if (m.kind === "image" && m.storageKey) {
         try {
           const blob = await loadMaterialImage(m.storageKey);
@@ -291,9 +325,10 @@
   // ---------- 新建课堂笔记：标题 + 讲课语言 + 互译语言多选，跟 modal.js 的单表单弹窗
   // 字段类型不够用（要多选），所以跟 readingNotes.js 的 openNotesModal 一样手搭一个。 ----------
 
-  function openNewNoteModal(store, onStart) {
+  function openNewNoteModal(store, defaultCourseId, onStart) {
     let overlay;
     let sourceLang = "fr";
+    let courseId = defaultCourseId || null;
     const targetSet = new Set();
     // 录音还没开始、笔记还没建出来，这时候选的材料先留在内存里：图片留着原始 File
     // （等笔记有 id 了才批量存进 IndexedDB），PPT 不依赖笔记 id、可以立刻在客户端解析
@@ -332,10 +367,29 @@
         ])
       );
 
+      // 所属课程：默认带出打开这个弹窗时所在的课程（从某门课的笔记列表里点"+新建这门课的
+      // 笔记"进来的话），也可以在这里改成别的课程或者"未分类"——不想在这一步纠结课程归属
+      // 的话，之后随时能在笔记详情页里改（见 setClassNoteCourseId）。
+      const courses = store.listClassNoteCourses();
+      const courseSelect = h(
+        "select",
+        { class: "field-input" },
+        [h("option", { value: "" }, "未分类"), ...courses.map((c) => h("option", { value: c.id }, c.name))]
+      );
+      courseSelect.value = courseId || "";
+      courseSelect.addEventListener("change", (e) => {
+        courseId = e.target.value || null;
+      });
+
       const photoInput = h("input", { type: "file", accept: "image/*", multiple: true, style: "display:none;" });
       const pptxInput = h("input", {
         type: "file",
         accept: ".pptx,application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        style: "display:none;",
+      });
+      const docxInput = h("input", {
+        type: "file",
+        accept: ".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         style: "display:none;",
       });
 
@@ -369,12 +423,34 @@
         rerenderBox(keepTitle);
       });
 
+      docxInput.addEventListener("change", async () => {
+        const files = Array.from(docxInput.files || []);
+        docxInput.value = "";
+        if (!files.length) return;
+        const keepTitle = titleInput.value;
+        materialsBusy = true;
+        for (const file of files) {
+          materialsStatus = `正在解析 Word 文档「${file.name}」…`;
+          rerenderBox(keepTitle);
+          try {
+            const buffer = await file.arrayBuffer();
+            const extractedText = await extractDocxText(buffer);
+            pendingMaterials.push({ kind: "docx", name: file.name, extractedText });
+            materialsStatus = "";
+          } catch (err) {
+            materialsStatus = `解析 Word 文档「${file.name}」失败：${(err && err.message) || "请确认是有效的 .docx 文件"}`;
+          }
+        }
+        materialsBusy = false;
+        rerenderBox(keepTitle);
+      });
+
       const materialsListEl = pendingMaterials.length
         ? h(
             "div", { style: "display:flex;flex-direction:column;gap:6px;margin-top:6px;" },
             pendingMaterials.map((m, idx) =>
               h("div", { class: "list-row", style: "align-items:center;" }, [
-                h("span", { style: "flex:1;font-size:12px;" }, `${m.kind === "pptx" ? "📑" : "🖼️"} ${m.name}`),
+                h("span", { style: "flex:1;font-size:12px;" }, `${materialIcon(m.kind)} ${m.name}`),
                 h(
                   "span",
                   {
@@ -395,14 +471,17 @@
         h("div", { class: "modal-title" }, "新建课堂笔记"),
         h("label", { class: "field-row" }, [h("span", { class: "field-label" }, "标题"), titleInput]),
         h("label", { class: "field-row" }, [h("span", { class: "field-label" }, "讲课语言"), sourceSelect]),
+        courses.length ? h("label", { class: "field-row" }, [h("span", { class: "field-label" }, "所属课程"), courseSelect]) : null,
         h("div", { class: "field-label", style: "margin:10px 0 4px;" }, "需要互译成哪些语言（可多选，可以不选）"),
         h("div", { class: "toggle-grid" }, targetChecks),
         h("div", { class: "field-label", style: "margin:10px 0 4px;" }, "上传材料（选填，之后也能随时在笔记详情页里补充）"),
         h("div", { class: "section-row", style: "gap:8px;" }, [
           h("button", { type: "button", class: "btn btn-outline btn-sm", onClick: () => photoInput.click() }, "+ 上传照片"),
           h("button", { type: "button", class: "btn btn-outline btn-sm", onClick: () => pptxInput.click() }, "+ 上传 PPT"),
+          h("button", { type: "button", class: "btn btn-outline btn-sm", onClick: () => docxInput.click() }, "+ 上传 Word"),
           photoInput,
           pptxInput,
+          docxInput,
         ]),
         materialsListEl,
         materialsStatus ? h("div", { class: "muted", style: "font-size:12px;margin-top:4px;" }, materialsStatus) : null,
@@ -419,7 +498,7 @@
                 const startBtn = e.currentTarget;
                 startBtn.disabled = true;
                 startBtn.textContent = "创建中…";
-                const note = store.addClassNote({ title, sourceLang, targetLangs: [...targetSet] });
+                const note = store.addClassNote({ title, sourceLang, targetLangs: [...targetSet], courseId });
                 for (const m of pendingMaterials) {
                   try {
                     if (m.kind === "image") {
@@ -427,7 +506,7 @@
                       await saveMaterialImage(key, m.file);
                       store.addClassNoteMaterial(note.id, { kind: "image", name: m.name, storageKey: key });
                     } else {
-                      store.addClassNoteMaterial(note.id, { kind: "pptx", name: m.name, extractedText: m.extractedText });
+                      store.addClassNoteMaterial(note.id, { kind: m.kind, name: m.name, extractedText: m.extractedText });
                     }
                   } catch {
                     // 单条材料保存失败不阻塞开始录音，笔记本身已经建好了
@@ -446,6 +525,191 @@
     function rerenderBox(keepTitle) {
       mount(overlay.querySelector(".modal-box"), box());
       if (keepTitle) overlay.querySelector(".modal-box input[type=text]").value = keepTitle;
+    }
+
+    overlay = h("div", { class: "modal-overlay" }, [h("div", { class: "modal-box" }, [box()])]);
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) overlay.remove();
+    });
+    document.body.appendChild(overlay);
+  }
+
+  // ---------- 上传一份已经录好的录音文件，生成一条笔记：不是现场录音，没有"实时识别"
+  // 这一步，转录内容要靠「数据与设置」里配置的云端语音识别服务生成——跟"整体重新识别"
+  // 是同一套底层逻辑（speechToTextProviders.transcribeAudioBlob），复用 renderTranscriptTab
+  // 里"重新识别"那一栏：这条笔记天生没有"实时识别"内容（hasLive 为 false），转录 tab
+  // 会自动停在"重新识别"栏，用户在那里点"开始整体重新识别"就行，这里不用重复实现一遍
+  // 识别流程，只管把笔记和音频文件建好。 ----------
+
+  function openUploadAudioModal(store, defaultCourseId, onCreated) {
+    let overlay;
+    let sourceLang = "fr";
+    let courseId = defaultCourseId || null;
+    let audioFile = null;
+    const targetSet = new Set();
+    let busy = false;
+    let statusText = "";
+
+    function box() {
+      const titleInput = h("input", { class: "field-input", type: "text", placeholder: "标题（选填，比如“外部录音·经济学讲座”）" });
+
+      const sourceSelect = h(
+        "select",
+        { class: "field-input" },
+        store.CLASS_NOTE_LANGUAGES.map((l) => h("option", { value: l.code }, l.label))
+      );
+      sourceSelect.value = sourceLang;
+      sourceSelect.addEventListener("change", (e) => {
+        sourceLang = e.target.value;
+        targetSet.delete(sourceLang);
+        rerenderBox(titleInput.value);
+      });
+
+      const targetChecks = store.CLASS_NOTE_LANGUAGES.filter((l) => l.code !== sourceLang).map((l) =>
+        h("label", { class: "toggle-row" }, [
+          h("input", {
+            type: "checkbox",
+            checked: targetSet.has(l.code) || undefined,
+            onChange: (e) => {
+              if (e.target.checked) targetSet.add(l.code);
+              else targetSet.delete(l.code);
+            },
+          }),
+          h("span", {}, l.label),
+        ])
+      );
+
+      const courses = store.listClassNoteCourses();
+      const courseSelect = h(
+        "select",
+        { class: "field-input" },
+        [h("option", { value: "" }, "未分类"), ...courses.map((c) => h("option", { value: c.id }, c.name))]
+      );
+      courseSelect.value = courseId || "";
+      courseSelect.addEventListener("change", (e) => {
+        courseId = e.target.value || null;
+      });
+
+      const audioInput = h("input", { type: "file", accept: "audio/*", style: "display:none;" });
+      const audioBtn = h(
+        "button",
+        { type: "button", class: "btn btn-outline btn-sm", onClick: () => audioInput.click() },
+        audioFile ? `已选择：${audioFile.name}` : "+ 选择录音文件"
+      );
+      audioInput.addEventListener("change", () => {
+        const files = Array.from(audioInput.files || []);
+        audioFile = files[0] || null;
+        rerenderBox(titleInput.value);
+      });
+
+      return h("div", {}, [
+        h("div", { class: "modal-title" }, "上传录音文件生成笔记"),
+        h(
+          "div", { class: "muted", style: "font-size:12px;margin-bottom:8px;" },
+          "适合在别的地方（比如手机备忘录、录音笔）已经录好的音频，比如没赶上用这个 App 现场录的课，或者会议、讲座录音。上传之后需要在「数据与设置」配置好语音识别服务的密钥，才能在笔记详情页里生成转录文字。"
+        ),
+        h("label", { class: "field-row" }, [h("span", { class: "field-label" }, "标题"), titleInput]),
+        h("label", { class: "field-row" }, [h("span", { class: "field-label" }, "音频里说的语言"), sourceSelect]),
+        courses.length ? h("label", { class: "field-row" }, [h("span", { class: "field-label" }, "所属课程"), courseSelect]) : null,
+        h("div", { class: "field-label", style: "margin:10px 0 4px;" }, "需要互译成哪些语言（可多选，可以不选，之后随时能改）"),
+        h("div", { class: "toggle-grid" }, targetChecks),
+        h("div", { class: "field-label", style: "margin:10px 0 4px;" }, "录音文件"),
+        h("div", { class: "section-row", style: "gap:8px;" }, [audioBtn, audioInput]),
+        statusText ? h("div", { class: "muted", style: "font-size:12px;margin-top:8px;" }, statusText) : null,
+        h("div", { class: "modal-actions" }, [
+          h("button", { type: "button", class: "btn btn-ghost", onClick: () => overlay.remove() }, "取消"),
+          h(
+            "button",
+            {
+              type: "button",
+              class: "btn btn-primary",
+              disabled: busy || !audioFile || undefined,
+              onClick: async (e) => {
+                if (!audioFile) return;
+                busy = true;
+                const btn = e.currentTarget;
+                btn.disabled = true;
+                btn.textContent = "创建中…";
+                const title = titleInput.value.trim();
+                const note = store.addClassNote({
+                  title, sourceLang, targetLangs: [...targetSet], courseId, sourceType: "uploaded",
+                });
+                let audioKey = null;
+                try {
+                  audioKey = makeAudioKey(note.id);
+                  await saveAudio(audioKey, audioFile);
+                } catch {
+                  audioKey = null;
+                }
+                store.finishClassNoteRecording(note.id, { durationSeconds: 0, audioKey });
+                overlay.remove();
+                onCreated(note, { audioSaved: Boolean(audioKey) });
+              },
+            },
+            "生成笔记"
+          ),
+        ]),
+      ]);
+    }
+
+    function rerenderBox(keepTitle) {
+      mount(overlay.querySelector(".modal-box"), box());
+      if (keepTitle) overlay.querySelector(".modal-box input[type=text]").value = keepTitle;
+    }
+
+    overlay = h("div", { class: "modal-overlay" }, [h("div", { class: "modal-box" }, [box()])]);
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) overlay.remove();
+    });
+    document.body.appendChild(overlay);
+  }
+
+  // ---------- 互译语言随时可改：录音页和详情页共用同一个弹窗。讲课语言（sourceLang）
+  // 建好笔记之后不能再改——它绑定的是语音识别引擎的识别语种，中途换会打断正在进行的
+  // 识别；但互译目标语言只是"转录完之后再翻译成什么"，随时改都不影响转录本身，改完后
+  // 新增的语言会在下一次翻译时（自动翻译轮询，或详情页手动点"翻译"）把已有的转录内容
+  // 一起补上，不需要额外的"补翻译"入口。 ----------
+  function openTargetLangsModal(store, note, onSaved) {
+    let overlay;
+    const targetSet = new Set(note.targetLangs);
+
+    function box() {
+      const checks = store.CLASS_NOTE_LANGUAGES.filter((l) => l.code !== note.sourceLang).map((l) =>
+        h("label", { class: "toggle-row" }, [
+          h("input", {
+            type: "checkbox",
+            checked: targetSet.has(l.code) || undefined,
+            onChange: (e) => {
+              if (e.target.checked) targetSet.add(l.code);
+              else targetSet.delete(l.code);
+            },
+          }),
+          h("span", {}, l.label),
+        ])
+      );
+      return h("div", {}, [
+        h("div", { class: "modal-title" }, "互译语言"),
+        h(
+          "div", { class: "muted", style: "font-size:12px;margin-bottom:8px;" },
+          "随时可以增加或去掉互译语言；新增的语言会在下一次翻译时自动把已经转录的内容一起补上。"
+        ),
+        h("div", { class: "toggle-grid" }, checks),
+        h("div", { class: "modal-actions" }, [
+          h("button", { type: "button", class: "btn btn-ghost", onClick: () => overlay.remove() }, "取消"),
+          h(
+            "button",
+            {
+              type: "button", class: "btn btn-primary",
+              onClick: () => {
+                store.setClassNoteTargetLangs(note.id, [...targetSet]);
+                overlay.remove();
+                onSaved();
+              },
+            },
+            "保存"
+          ),
+        ]),
+      ]);
     }
 
     overlay = h("div", { class: "modal-overlay" }, [h("div", { class: "modal-box" }, [box()])]);
@@ -487,8 +751,10 @@
             existing ? existing.text : null,
             note.targetLangs.length > 0
           );
+          const wasNearBottom = isScrollNearBottom(recordingRefs.segmentListEl);
           recordingRefs.segmentListEl.appendChild(block);
           recordingRefs.segmentSlots.push(translationEl);
+          if (wasNearBottom) scrollToBottom(recordingRefs.segmentListEl);
         } else {
           recordingRefs.captionEl.textContent = seg.text;
         }
@@ -526,9 +792,28 @@
     const activeRecorder = recorder;
     recorder = null;
     recordingNoteId = null;
+    // 这几行必须在真正 await activeRecorder.stop() 之前就把 view 切到"详情页"：
+    // activeRecorder.stop() 内部会同步触发一次 onStateChange（这次状态变化是"停止"），
+    // 而 onStateChange 又会调用 rerender()——如果这时候 view.mode 还停在 "record"，
+    // 就会撞上 renderRecordView 里"recorder 为空就自动开始录音"的逻辑（那段逻辑是给
+    // "刚打开录音页、还没真正开始录"这种情况设计的），结果凭空又拉起一次全新的录音，
+    // 而用户其实已经点了"结束录音"——造成一个"僵尸录音"：界面看着已经停在详情页，
+    // 后台却又在悄悄录一条没人知道的新音频，"+新建笔记"相关按钮也会一直被"有笔记
+    // 正在录音"误锁住，直到手动刷新页面才能解除。
+    view = { mode: "detail", noteId: note.id };
+    detailTab = "transcript";
+    activeTranslationLang = note.targetLangs[0] || null;
+    activeNotesLang = NOTES_SOURCE_KEY;
+    flashcardIndex = 0;
+    flashcardFlipped = false;
+    qaBusy = false;
+    qaError = null;
+    transcriptViewMode = "live";
+    retranscriptActiveLang = null;
+    retranscribeBusy = false;
+    retranscribeProgress = null;
+    retranscribeError = null;
     if (!activeRecorder) {
-      view = { mode: "detail", noteId: note.id };
-      detailTab = "transcript";
       rerender();
       return;
     }
@@ -564,14 +849,6 @@
           if (view.mode === "detail" && view.noteId === note.id) rerender();
         });
     }
-    view = { mode: "detail", noteId: note.id };
-    detailTab = "transcript";
-    activeTranslationLang = note.targetLangs[0] || null;
-    activeNotesLang = NOTES_SOURCE_KEY;
-    flashcardIndex = 0;
-    flashcardFlipped = false;
-    qaBusy = false;
-    qaError = null;
     rerender();
   }
 
@@ -702,7 +979,17 @@
               h("div", { class: "section-row", style: "margin-top:12px;" }, [pauseBtn, stopBtn]),
             ]),
         h("div", { class: "card" }, [
-          h("div", { class: "card-title" }, "实时转录"),
+          h("div", { class: "section-row", style: "justify-content:space-between;align-items:center;" }, [
+            h("div", { class: "card-title" }, "实时转录"),
+            h(
+              "button",
+              {
+                class: "btn btn-outline btn-sm", type: "button",
+                onClick: () => openTargetLangsModal(store, note, () => rerender()),
+              },
+              hasTargetLangs ? "编辑互译语言" : "+ 互译语言"
+            ),
+          ]),
           hasTargetLangs && langSwitcher ? langSwitcher.el : null,
           hasTargetLangs && !hasTranslationKey
             ? h(
@@ -716,6 +1003,10 @@
         ]),
       ])
     );
+    // 每次整页重新渲染（开始录音、暂停/继续、报错等触发的 rerender）都会把转录列表
+    // 整个重新画一遍，这时候默认停在最底部（最新内容），而不是留在浏览器默认的顶部——
+    // 正在录音时最新内容才是用户想看到的。
+    scrollToBottom(segmentListEl);
 
     stopWatchdog();
     watchdogTimer = setInterval(() => {
@@ -739,10 +1030,12 @@
               if (lang !== liveTranslateLang || !recordingRefs) return;
               const total = (note.translations[lang] || []).length;
               const startIndex = total - segments.length;
+              const wasNearBottom = isScrollNearBottom(recordingRefs.segmentListEl);
               segments.forEach((seg, i) => {
                 const el = recordingRefs.segmentSlots[startIndex + i];
                 if (el) el.textContent = seg.text;
               });
+              if (wasNearBottom) scrollToBottom(recordingRefs.segmentListEl);
             },
             onTick: refreshTranslationStatus,
           });
@@ -779,17 +1072,48 @@
       });
     }
 
+    // 笔记随时可以改归属课程——不管建的时候有没有选，或者后来想把它挪到别的课程里。
+    function openMoveCourseModal() {
+      const courses = store.listClassNoteCourses();
+      openFormModal({
+        title: "移动到其它课程",
+        fields: [
+          {
+            name: "courseId", label: "所属课程", type: "select",
+            options: [{ value: "", label: "未分类" }, ...courses.map((c) => ({ value: c.id, label: c.name }))],
+          },
+        ],
+        initialValues: { courseId: note.courseId || "" },
+        onSubmit: (v) => {
+          store.setClassNoteCourseId(note.id, v.courseId || null);
+          rerender();
+        },
+      });
+    }
+
     // ---------- 转录 tab：原文+译文合并显示（用户明确要求"一句话的原文和翻译在同一个
-    // 格子里，下一句再另起一格"），不再单独分一个"翻译" tab。没选互译语言时就是纯原文。 ----------
-    function renderTranscriptTab() {
-      if (!note.transcriptSegments.length) {
-        return h("div", { class: "empty-hint" }, "还没有转录内容");
+    // 格子里，下一句再另起一格"），不再单独分一个"翻译" tab。没选互译语言时就是纯原文。
+    // "实时识别"（录音过程中 Web Speech API 现场转出来的）和"重新识别"（录音结束后
+    // 用云端语音识别服务整体重新识别一遍，见下面 buildRetranscriptPane）保留两份，
+    // 用户可以随时切换对比——这两份内容渲染逻辑几乎一样（都是"原文+译文合并显示、
+    // 可选目标语言、可以点按钮翻译"），所以抽成 renderTranslatableTranscript 公用。 ----------
+
+    /**
+     * translateNew(lang)/translateAll(lang)：具体怎么翻译由调用方决定（实时转录是"只翻译
+     * 还没翻译过的新增部分"，重新识别的内容不会再增长、两个回调做的是同一件事——整段翻译），
+     * 这里只管通用的"选语言、点按钮、显示原文+译文"这套 UI 外壳。
+     */
+    function renderTranslatableTranscript({
+      segments, translations, targetLangs, getActiveLang, setActiveLang,
+      translateNew, translateAll, onChanged,
+    }) {
+      if (!targetLangs.length) {
+        return h("div", { class: "card" }, segments.map(renderTranscriptRow));
       }
-      if (!note.targetLangs.length) {
-        return h("div", { class: "card" }, note.transcriptSegments.map(renderTranscriptRow));
-      }
-      if (!activeTranslationLang || !note.targetLangs.includes(activeTranslationLang)) {
-        activeTranslationLang = note.targetLangs[0];
+      let activeLang = getActiveLang();
+      if (!activeLang || !targetLangs.includes(activeLang)) {
+        activeLang = targetLangs[0];
+        setActiveLang(activeLang);
       }
 
       const bodySlot = h("div", { style: "margin-top:12px;" });
@@ -798,25 +1122,22 @@
       }
 
       function buildBody() {
-        const translated = note.translations[activeTranslationLang] || [];
-        const pendingCount = note.transcriptSegments.length - translated.length;
+        const translated = translations[activeLang] || [];
+        const pendingCount = segments.length - translated.length;
         const currentProvider = store.getSettings().translationProvider;
         const statusEl = h(
           "div", { class: "muted", style: "font-size:12px;margin:6px 0 10px;" },
           hasTranslationKey ? "" : `还没配置当前使用的翻译服务（${providerLabel(store, currentProvider)}），去「数据与设置」的「多语言互译服务」里填一个才能翻译；原文还是会照常显示。`
         );
 
-        // 录音过程中已经自动翻译过一部分（见 renderRecordView 的自动翻译），这里的"翻译"
-        // 按钮只追赶还没翻译过的新内容，不会把已经翻译好的部分重新翻一遍多花一次请求；
-        // 如果想换一家服务商之后整段重新来一遍，用旁边的"全部重新翻译"。
-        async function translateNow() {
+        async function doTranslateNew() {
           transBtn.disabled = true;
           const prevLabel = transBtn.textContent;
           transBtn.textContent = "翻译中…";
           statusEl.textContent = `${providerLabel(store, currentProvider)}正在翻译，可能需要几秒…`;
           try {
-            await translateNewSegments(store, note, activeTranslationLang);
-            rerender();
+            await translateNew(activeLang);
+            onChanged();
           } catch (err) {
             transBtn.disabled = false;
             transBtn.textContent = prevLabel;
@@ -824,22 +1145,15 @@
           }
         }
 
-        async function retranslateAll() {
+        async function doTranslateAll() {
           redoBtn.disabled = true;
           transBtn.disabled = true;
           const prevLabel = redoBtn.textContent;
           redoBtn.textContent = "翻译中…";
           statusEl.textContent = `${providerLabel(store, currentProvider)}正在重新翻译全部内容，可能需要几秒…`;
           try {
-            const settings = store.getSettings();
-            const segments = await translationProviders.translateSegments({
-              provider: settings.translationProvider,
-              segments: note.transcriptSegments,
-              targetLangCode: activeTranslationLang,
-              keys: translationKeysFromSettings(settings),
-            });
-            store.setClassNoteTranslation(note.id, activeTranslationLang, segments);
-            rerender();
+            await translateAll(activeLang);
+            onChanged();
           } catch (err) {
             redoBtn.disabled = false;
             redoBtn.textContent = prevLabel;
@@ -853,17 +1167,17 @@
           {
             class: "btn btn-outline btn-sm", type: "button",
             disabled: !hasTranslationKey || pendingCount <= 0 || undefined,
-            onClick: translateNow,
+            onClick: doTranslateNew,
           },
-          !translated.length ? `翻译成${langLabel(store, activeTranslationLang)}` : pendingCount > 0 ? `翻译新增的${pendingCount}句` : "已翻译到最新"
+          !translated.length ? `翻译成${langLabel(store, activeLang)}` : pendingCount > 0 ? `翻译新增的${pendingCount}句` : "已翻译到最新"
         );
         const redoBtn = translated.length
           ? h(
               "button",
               {
                 class: "btn btn-ghost btn-sm", type: "button",
-                disabled: !hasTranslationKey || !note.transcriptSegments.length || undefined,
-                onClick: retranslateAll,
+                disabled: !hasTranslationKey || !segments.length || undefined,
+                onClick: doTranslateAll,
               },
               "全部重新翻译"
             )
@@ -874,24 +1188,206 @@
           statusEl,
           h(
             "div", { class: "card" },
-            note.transcriptSegments.map((seg, i) => buildSegmentBlock(seg, translated[i] ? translated[i].text : null, true).block)
+            segments.map((seg, i) => buildSegmentBlock(seg, translated[i] ? translated[i].text : null, true).block)
           ),
         ]);
       }
 
-      const langSeg = note.targetLangs.length > 1
+      const langSeg = targetLangs.length > 1
         ? createSegmented({
             kind: "pill",
-            options: note.targetLangs.map((code) => ({ key: code, label: langLabel(store, code) })),
-            activeKey: activeTranslationLang,
+            options: targetLangs.map((code) => ({ key: code, label: langLabel(store, code) })),
+            activeKey: activeLang,
             onSelect: (key) => {
-              activeTranslationLang = key;
+              setActiveLang(key);
               refreshBody();
             },
           })
         : null;
       refreshBody();
       return h("div", {}, [langSeg ? langSeg.el : null, bodySlot]);
+    }
+
+    function buildLivePane() {
+      return renderTranslatableTranscript({
+        segments: note.transcriptSegments,
+        translations: note.translations,
+        targetLangs: note.targetLangs,
+        getActiveLang: () => activeTranslationLang,
+        setActiveLang: (lang) => { activeTranslationLang = lang; },
+        // 录音过程中已经自动翻译过一部分（见 renderRecordView 的自动翻译），这里的"翻译"
+        // 按钮只追赶还没翻译过的新内容，不会把已经翻译好的部分重新翻一遍多花一次请求。
+        translateNew: (lang) => translateNewSegments(store, note, lang),
+        translateAll: async (lang) => {
+          const settings = store.getSettings();
+          const segments = await translationProviders.translateSegments({
+            provider: settings.translationProvider,
+            segments: note.transcriptSegments,
+            targetLangCode: lang,
+            keys: translationKeysFromSettings(settings),
+          });
+          store.setClassNoteTranslation(note.id, lang, segments);
+        },
+        onChanged: rerender,
+      });
+    }
+
+    /**
+     * "重新识别"整段一次性生成、不会像实时转录那样持续增长，所以这里的两个回调做的其实是
+     * 同一件事——整段翻译 note.retranscript.segments，写回 store.setClassNoteRetranscriptTranslation。
+     */
+    function buildRetranscribedPane() {
+      return renderTranslatableTranscript({
+        segments: note.retranscript.segments,
+        translations: note.retranscript.translations || {},
+        targetLangs: note.targetLangs,
+        getActiveLang: () => retranscriptActiveLang,
+        setActiveLang: (lang) => { retranscriptActiveLang = lang; },
+        translateNew: (lang) => translateRetranscriptAll(lang),
+        translateAll: (lang) => translateRetranscriptAll(lang),
+        onChanged: rerender,
+      });
+    }
+
+    async function translateRetranscriptAll(lang) {
+      const settings = store.getSettings();
+      const segments = await translationProviders.translateSegments({
+        provider: settings.translationProvider,
+        segments: note.retranscript.segments,
+        targetLangCode: lang,
+        keys: translationKeysFromSettings(settings),
+      });
+      store.setClassNoteRetranscriptTranslation(note.id, lang, segments);
+    }
+
+    // ---------- "整体重新识别"：录音结束后，把完整的录音文件重新整段识别一遍，弥补
+    // Web Speech API 实时识别经常漏内容的问题（网络抖动、讲话太快跟不上、浏览器标签页
+    // 切到后台等原因都可能让实时识别漏听一截）；用的是「数据与设置」里配置的 Google/Azure
+    // 语音识别服务，需要用户自己的密钥、自己付费——跟"实时识别"免费但可能漏内容不一样，
+    // 这是"更慢但更完整"的备选方案，两份都保留，可以随时切换对比。 ----------
+    function buildRetranscribePrompt() {
+      const settings = store.getSettings();
+      const sttProvider = settings.sttProvider;
+      const sttConfigured = speechToTextProviders.isSttProviderConfigured(sttProvider, settings);
+      const hasAudio = Boolean(note.audioKey);
+      const canRun = hasAudio && sttConfigured && !retranscribeBusy;
+
+      const hintEl = h("div", { class: "muted", style: "font-size:12px;margin-top:8px;" }, [
+        !hasAudio
+          ? "这条笔记没有保存下录音文件（可能是很早之前的旧笔记，或者当时保存失败），没法整体重新识别。"
+          : !sttConfigured
+            ? `还没配置当前使用的语音识别服务（${sttProviderLabel(store, sttProvider)}），去「数据与设置」的「语音转文字服务」里填一个才能用这个功能。`
+            : "整段音频会按大约 55 秒一段切开分批发送识别，一堂课可能需要几分钟，请不要中途离开这个页面。",
+      ]);
+
+      async function runRetranscribe() {
+        retranscribeBusy = true;
+        retranscribeError = null;
+        retranscribeProgress = { index: 0, total: 0 };
+        refreshTab();
+        try {
+          const blob = await loadAudio(note.audioKey);
+          if (!blob) throw new Error("没有读取到这条笔记的录音文件，可能已经被清理了");
+          const segments = await speechToTextProviders.transcribeAudioBlob({
+            provider: sttProvider,
+            keys: settings,
+            blob,
+            languageCode: SPEECH_LANG_TAGS[note.sourceLang] || "en-US",
+            onProgress: (p) => {
+              retranscribeProgress = p;
+              refreshTab();
+            },
+          });
+          if (!segments.length) throw new Error("没有从这段录音里识别出任何内容");
+          store.setClassNoteRetranscript(note.id, { provider: sttProvider, segments });
+          // "上传录音文件"这类笔记建笔记的时候还不知道音频有多长（没有现场录音的计时器），
+          // 借这次识别结果顺便补上一个大概的时长——最后一段有内容的识别结果的结束时间。
+          if (note.sourceType === "uploaded") {
+            const lastEnd = segments[segments.length - 1].end || 0;
+            store.finishClassNoteRecording(note.id, { durationSeconds: lastEnd, audioKey: note.audioKey });
+          }
+          retranscribeBusy = false;
+          retranscribeProgress = null;
+          transcriptViewMode = "retranscript";
+          retranscriptActiveLang = null;
+          rerender();
+        } catch (err) {
+          retranscribeBusy = false;
+          retranscribeProgress = null;
+          retranscribeError = err.message || "识别失败";
+          refreshTab();
+        }
+      }
+
+      const progressText = retranscribeProgress
+        ? retranscribeProgress.total > 0
+          ? `正在识别第 ${retranscribeProgress.index + 1}/${retranscribeProgress.total} 段…`
+          : "正在准备音频…"
+        : null;
+
+      return h("div", { class: "card" }, [
+        h("div", { class: "card-title" }, note.retranscript ? "重新生成整体识别结果" : "整体重新识别"),
+        hintEl,
+        note.retranscript
+          ? h(
+              "div", { class: "muted", style: "font-size:12px;margin-top:4px;" },
+              `上一次是用${sttProviderLabel(store, note.retranscript.provider)}识别的，生成于 ${new Date(note.retranscript.generatedAt).toLocaleString("zh-CN")}；重新生成会覆盖掉这一份（连同已经翻译好的内容）。`
+            )
+          : null,
+        h("div", { class: "section-row", style: "margin-top:10px;" }, [
+          h(
+            "button",
+            { class: "btn btn-primary btn-sm", type: "button", disabled: !canRun || undefined, onClick: runRetranscribe },
+            retranscribeBusy ? "识别中…" : note.retranscript ? "重新生成" : "开始整体重新识别"
+          ),
+        ]),
+        progressText ? h("div", { class: "muted", style: "font-size:12px;margin-top:8px;" }, progressText) : null,
+        retranscribeError ? h("div", { style: "color:hsl(4,70%,55%);font-size:12px;margin-top:8px;" }, retranscribeError) : null,
+      ]);
+    }
+
+    function buildRetranscriptPane() {
+      if (!note.retranscript) return buildRetranscribePrompt();
+      return h("div", {}, [buildRetranscribePrompt(), buildRetranscribedPane()]);
+    }
+
+    let refreshTab = () => {};
+
+    function renderTranscriptTab() {
+      const hasLive = note.transcriptSegments.length > 0;
+      const hasRetranscript = Boolean(note.retranscript);
+      const hasAudio = Boolean(note.audioKey);
+      // 真的什么都没有（没有实时转录、没有重新识别过、连录音文件都没有）才显示"还没有
+      // 转录内容"——"上传录音文件生成笔记"刚建好时正是这种"有音频、但还没识别过"的
+      // 状态（hasLive/hasRetranscript 都是 false，但 hasAudio 是 true），这时候应该让
+      // 用户能看到"开始整体重新识别"的入口，而不是一个只会显示"没有内容"的死页面。
+      if (!hasLive && !hasRetranscript && !hasAudio) {
+        return h("div", { class: "empty-hint" }, "还没有转录内容");
+      }
+      // "上传录音文件生成笔记"（sourceType: "uploaded"）这类笔记压根没有"实时识别"这一份
+      // （录音不是现场录的，谈不上实时），直接停在"重新识别"，不给一个空的"实时识别"可切。
+      if (!hasLive) transcriptViewMode = "retranscript";
+
+      const bodySlot = h("div", { style: "margin-top:12px;" });
+      refreshTab = () => mount(bodySlot, transcriptViewMode === "retranscript" ? buildRetranscriptPane() : buildLivePane());
+
+      const modeSeg = hasLive
+        ? createSegmented({
+            kind: "pill",
+            options: [
+              { key: "live", label: "实时识别" },
+              { key: "retranscript", label: hasRetranscript ? "重新识别" : "重新识别（未生成）" },
+            ],
+            activeKey: transcriptViewMode,
+            onSelect: (key) => {
+              transcriptViewMode = key;
+              refreshTab();
+            },
+          })
+        : null;
+
+      refreshTab();
+      return h("div", {}, [modeSeg ? modeSeg.el : null, bodySlot]);
     }
 
     // ---------- 笔记 tab：原文（AI 整理出来的 Markdown）+ 可以再翻译成其它语言。
@@ -1047,10 +1543,16 @@
         accept: ".pptx,application/vnd.openxmlformats-officedocument.presentationml.presentation",
         style: "display:none;",
       });
+      const docxInput = h("input", {
+        type: "file",
+        accept: ".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        style: "display:none;",
+      });
 
       function setBusy(busy) {
         photoBtn.disabled = busy || undefined;
         pptxBtn.disabled = busy || undefined;
+        docxBtn.disabled = busy || undefined;
       }
 
       // 注意：只有真的成功存进至少一条材料时才 rerender()——rerender() 会把整个详情页
@@ -1102,12 +1604,35 @@
         if (anyAdded) rerender();
       });
 
+      docxInput.addEventListener("change", async () => {
+        const files = Array.from(docxInput.files || []);
+        docxInput.value = "";
+        if (!files.length) return;
+        setBusy(true);
+        let anyAdded = false;
+        for (const file of files) {
+          statusEl.textContent = `正在解析 Word 文档「${file.name}」…`;
+          try {
+            const buffer = await file.arrayBuffer();
+            const extractedText = await extractDocxText(buffer);
+            store.addClassNoteMaterial(note.id, { kind: "docx", name: file.name, extractedText });
+            anyAdded = true;
+            statusEl.textContent = "";
+          } catch (err) {
+            statusEl.textContent = `解析 Word 文档「${file.name}」失败：${(err && err.message) || "请确认是有效的 .docx 文件"}`;
+          }
+        }
+        setBusy(false);
+        if (anyAdded) rerender();
+      });
+
       const photoBtn = h("button", { type: "button", class: "btn btn-outline btn-sm", onClick: () => photoInput.click() }, "+ 上传照片");
       const pptxBtn = h("button", { type: "button", class: "btn btn-outline btn-sm", onClick: () => pptxInput.click() }, "+ 上传 PPT");
+      const docxBtn = h("button", { type: "button", class: "btn btn-outline btn-sm", onClick: () => docxInput.click() }, "+ 上传 Word");
 
       function materialRow(m) {
         return h("div", { class: "list-row", style: "align-items:center;" }, [
-          h("span", { style: "flex:1;font-size:13px;" }, `${m.kind === "pptx" ? "📑" : "🖼️"} ${m.name || "未命名"}`),
+          h("span", { style: "flex:1;font-size:13px;" }, `${materialIcon(m.kind)} ${m.name || "未命名"}`),
           h(
             "span",
             {
@@ -1126,13 +1651,13 @@
       return h("div", { class: "card" }, [
         h("div", { class: "section-row", style: "justify-content:space-between;align-items:center;" }, [
           h("div", { class: "card-title" }, "课件材料"),
-          h("div", { class: "section-row", style: "gap:8px;" }, [photoBtn, pptxBtn, photoInput, pptxInput]),
+          h("div", { class: "section-row", style: "gap:8px;" }, [photoBtn, pptxBtn, docxBtn, photoInput, pptxInput, docxInput]),
         ]),
         materials.length
           ? h("div", { style: "margin-top:8px;display:flex;flex-direction:column;gap:6px;" }, materials.map(materialRow))
           : h(
               "div", { class: "muted", style: "font-size:12px;margin-top:8px;" },
-              "还没有上传材料——可以上传老师的 PPT 课件文字，或拍照的板书/讲义照片，生成笔记时会一并参考。"
+              "还没有上传材料——可以上传老师的 PPT/Word 课件文字，或拍照的板书/讲义照片，生成笔记时会一并参考。"
             ),
         statusEl,
       ]);
@@ -1480,7 +2005,14 @@
     mount(
       container,
       h("div", { style: "display:flex;flex-direction:column;gap:14px;" }, [
-        h("button", { class: "btn btn-ghost", type: "button", style: "align-self:flex-start;", onClick: () => { view = { mode: "list" }; rerender(); } }, "← 返回列表"),
+        h(
+          "button",
+          {
+            class: "btn btn-ghost", type: "button", style: "align-self:flex-start;",
+            onClick: () => { view = { mode: "courseNotes", courseId: note.courseId || null }; rerender(); },
+          },
+          "← 返回列表"
+        ),
         h("div", { class: "card" }, [
           h("div", { class: "section-row", style: "justify-content:space-between;align-items:flex-start;" }, [
             h("div", {}, [
@@ -1494,6 +2026,15 @@
           ]),
           h("div", { class: "section-row", style: "margin-top:10px;" }, [
             h("button", { class: "btn btn-outline btn-sm", type: "button", onClick: openRenameModal }, "改标题"),
+            h("button", { class: "btn btn-outline btn-sm", type: "button", onClick: openMoveCourseModal }, "移动到其它课程"),
+            h(
+              "button",
+              {
+                class: "btn btn-outline btn-sm", type: "button",
+                onClick: () => openTargetLangsModal(store, note, () => rerender()),
+              },
+              "编辑互译语言"
+            ),
             h(
               "span",
               {
@@ -1504,10 +2045,11 @@
                     danger: true,
                     confirmLabel: "删除",
                     onConfirm: () => {
+                      const backToCourseId = note.courseId || null;
                       deleteAudio(note.audioKey).catch(() => {});
                       deleteNoteMaterialImages(note);
                       store.removeClassNote(note.id);
-                      view = { mode: "list" };
+                      view = { mode: "courseNotes", courseId: backToCourseId };
                       rerender();
                     },
                   });
@@ -1540,52 +2082,148 @@
     );
   }
 
-  // ---------- 列表页 ----------
+  // ---------- 列表页：顶层是"课程"列表（每门课可能上很多次课），点进某门课/"未分类"
+  // 之后才是具体的笔记卡片列表——用户明确要求"多次课可以放在同一个文件夹里面，归属于
+  // 同一个课程"。原来直接铺全部笔记的那一层现在挪到了 renderCourseNotesView 里。 ----------
 
-  function renderListView(container, store, ctx, rerender) {
-    const notes = store.listClassNotes();
+  function renderNoteCard(store, note, rerender) {
+    return h(
+      "div",
+      {
+        class: "card", style: "cursor:pointer;",
+        onClick: () => {
+          view = { mode: "detail", noteId: note.id };
+          detailTab = "notes";
+          activeTranslationLang = note.targetLangs[0] || null;
+          activeNotesLang = NOTES_SOURCE_KEY;
+          flashcardIndex = 0;
+          flashcardFlipped = false;
+          qaBusy = false;
+          qaError = null;
+          transcriptViewMode = "live";
+          retranscriptActiveLang = null;
+          retranscribeBusy = false;
+          retranscribeProgress = null;
+          retranscribeError = null;
+          rerender();
+        },
+      },
+      [
+        h("div", { class: "section-row", style: "justify-content:space-between;align-items:flex-start;" }, [
+          h("div", { style: "font-size:14px;font-weight:600;" }, `${note.sourceType === "uploaded" ? "📤 " : ""}${note.title || "未命名笔记"}`),
+          h("span", { class: statusBadgeClass(note) }, statusLabel(note)),
+        ]),
+        h(
+          "div", { class: "muted", style: "font-size:12px;margin-top:6px;" },
+          `${langLabel(store, note.sourceLang)} → ${note.targetLangs.map((c) => langLabel(store, c)).join("、") || "（未选互译语言）"}`
+        ),
+        h(
+          "div", { class: "muted", style: "font-size:12px;margin-top:4px;" },
+          `${aiClient.formatSeconds(note.audioDurationSeconds)} · ${new Date(note.createdAt).toLocaleString("zh-CN")}`
+        ),
+        h("div", { class: "section-row", style: "justify-content:flex-end;margin-top:10px;" }, [
+          h(
+            "span",
+            {
+              class: "row-delete",
+              onClick: (e) => {
+                e.stopPropagation();
+                openConfirm({
+                  message: `删除《${note.title || "未命名笔记"}》？转录、翻译和笔记都会一起删除。`,
+                  danger: true,
+                  confirmLabel: "删除",
+                  onConfirm: () => {
+                    deleteAudio(note.audioKey).catch(() => {});
+                    deleteNoteMaterialImages(note);
+                    store.removeClassNote(note.id);
+                    rerender();
+                  },
+                });
+              },
+            },
+            "删除"
+          ),
+        ]),
+      ]
+    );
+  }
+
+  function renderActiveRecordingBanner(rerender) {
+    if (!recorder || !recordingNoteId) return null;
+    return h("div", { class: "card", style: "border-left:3px solid hsl(38,80%,55%);" }, [
+      h("div", { class: "section-row", style: "justify-content:space-between;align-items:center;" }, [
+        h("span", {}, "有一条课堂笔记正在录音中"),
+        h(
+          "button",
+          { class: "btn btn-outline btn-sm", type: "button", onClick: () => { view = { mode: "record", noteId: recordingNoteId }; rerender(); } },
+          "去看看"
+        ),
+      ]),
+    ]);
+  }
+
+  function renderMissingKeyHints(store) {
     const settings = store.getSettings();
     const hasClaudeKey = Boolean(settings.claudeApiKey);
-    const hasTranslationKey = translationProviders.isProviderConfigured(
-      settings.translationProvider,
-      translationKeysFromSettings(settings)
-    );
-    const missingKeyHints = [];
-    if (!hasClaudeKey) missingKeyHints.push("AI 整理笔记需要先填 Claude API 密钥");
-    if (!hasTranslationKey) missingKeyHints.push(`多语言互译需要先配置当前使用的翻译服务（${providerLabel(store, settings.translationProvider)}）密钥`);
+    const hasTranslationKey = translationProviders.isProviderConfigured(settings.translationProvider, translationKeysFromSettings(settings));
+    const hints = [];
+    if (!hasClaudeKey) hints.push("AI 整理笔记需要先填 Claude API 密钥");
+    if (!hasTranslationKey) hints.push(`多语言互译需要先配置当前使用的翻译服务（${providerLabel(store, settings.translationProvider)}）密钥`);
+    return hints.length
+      ? h("div", { class: "empty-hint" }, `还没配置好 AI 相关功能：录音转文字不需要密钥；${hints.join("；")}，去「数据与设置」填一下。`)
+      : null;
+  }
+
+  function openNewCourseModal(store, rerender) {
+    openFormModal({
+      title: "新建课程",
+      fields: [{ name: "name", label: "课程名称", type: "text", placeholder: "比如「宏观经济学」", required: true }],
+      onSubmit: (v) => {
+        store.addClassNoteCourse(v.name);
+        rerender();
+      },
+    });
+  }
+
+  function openRenameCourseModal(store, course, rerender) {
+    openFormModal({
+      title: "课程改名",
+      fields: [{ name: "name", label: "课程名称", type: "text", required: true }],
+      initialValues: { name: course.name },
+      onSubmit: (v) => {
+        store.renameClassNoteCourse(course.id, v.name);
+        rerender();
+      },
+    });
+  }
+
+  function renderCoursesOverview(container, store, ctx, rerender) {
+    const courses = store.listClassNoteCoursesWithStats();
+    const uncategorizedCount = store.listClassNotes(null).length;
     const browserOk = checkBrowserSupport();
 
-    function renderNoteCard(note) {
+    function courseCard(course) {
       return h(
         "div",
-        {
-          class: "card", style: "cursor:pointer;",
-          onClick: () => {
-            view = { mode: "detail", noteId: note.id };
-            detailTab = "notes";
-            activeTranslationLang = note.targetLangs[0] || null;
-            activeNotesLang = NOTES_SOURCE_KEY;
-            flashcardIndex = 0;
-            flashcardFlipped = false;
-            qaBusy = false;
-            qaError = null;
-            rerender();
-          },
-        },
+        { class: "card", style: "cursor:pointer;", onClick: () => { view = { mode: "courseNotes", courseId: course.id }; rerender(); } },
         [
           h("div", { class: "section-row", style: "justify-content:space-between;align-items:flex-start;" }, [
-            h("div", { style: "font-size:14px;font-weight:600;" }, note.title || "未命名笔记"),
-            h("span", { class: statusBadgeClass(note) }, statusLabel(note)),
+            h("div", { style: "font-size:14px;font-weight:600;" }, course.name),
+            h("span", { class: "badge badge-info" }, `${course.noteCount} 次课`),
           ]),
           h(
             "div", { class: "muted", style: "font-size:12px;margin-top:6px;" },
-            `${langLabel(store, note.sourceLang)} → ${note.targetLangs.map((c) => langLabel(store, c)).join("、") || "（未选互译语言）"}`
+            course.lastUpdatedAt ? `最近更新：${new Date(course.lastUpdatedAt).toLocaleString("zh-CN")}` : "还没有课时"
           ),
-          h(
-            "div", { class: "muted", style: "font-size:12px;margin-top:4px;" },
-            `${aiClient.formatSeconds(note.audioDurationSeconds)} · ${new Date(note.createdAt).toLocaleString("zh-CN")}`
-          ),
-          h("div", { class: "section-row", style: "justify-content:flex-end;margin-top:10px;" }, [
+          h("div", { class: "section-row", style: "justify-content:flex-end;gap:12px;margin-top:10px;" }, [
+            h(
+              "button",
+              {
+                class: "btn btn-outline btn-sm", type: "button",
+                onClick: (e) => { e.stopPropagation(); openRenameCourseModal(store, course, rerender); },
+              },
+              "改名"
+            ),
             h(
               "span",
               {
@@ -1593,15 +2231,10 @@
                 onClick: (e) => {
                   e.stopPropagation();
                   openConfirm({
-                    message: `删除《${note.title || "未命名笔记"}》？转录、翻译和笔记都会一起删除。`,
+                    message: `删除课程《${course.name}》？课程下的笔记不会被删除，会变成"未分类"。`,
                     danger: true,
                     confirmLabel: "删除",
-                    onConfirm: () => {
-                      deleteAudio(note.audioKey).catch(() => {});
-                      deleteNoteMaterialImages(note);
-                      store.removeClassNote(note.id);
-                      rerender();
-                    },
+                    onConfirm: () => { store.removeClassNoteCourse(course.id); rerender(); },
                   });
                 },
               },
@@ -1612,31 +2245,42 @@
       );
     }
 
-    const activeBanner =
-      recorder && recordingNoteId
-        ? h("div", { class: "card", style: "border-left:3px solid hsl(38,80%,55%);" }, [
-            h("div", { class: "section-row", style: "justify-content:space-between;align-items:center;" }, [
-              h("span", {}, "有一条课堂笔记正在录音中"),
-              h(
-                "button",
-                { class: "btn btn-outline btn-sm", type: "button", onClick: () => { view = { mode: "record", noteId: recordingNoteId }; rerender(); } },
-                "去看看"
-              ),
-            ]),
-          ])
-        : null;
+    const uncategorizedCard = h(
+      "div",
+      { class: "card", style: "cursor:pointer;", onClick: () => { view = { mode: "courseNotes", courseId: null }; rerender(); } },
+      [
+        h("div", { class: "section-row", style: "justify-content:space-between;align-items:flex-start;" }, [
+          h("div", { style: "font-size:14px;font-weight:600;" }, "未分类"),
+          h("span", { class: "badge badge-info" }, `${uncategorizedCount} 次课`),
+        ]),
+        h("div", { class: "muted", style: "font-size:12px;margin-top:6px;" }, "还没有归到任何课程的笔记"),
+      ]
+    );
 
     mount(
       container,
       h("div", { style: "display:flex;flex-direction:column;gap:14px;" }, [
-        h("div", { class: "section-row" }, [
+        h("div", { class: "section-row", style: "gap:8px;" }, [
           h("div", { class: "grow" }),
+          h("button", { class: "btn btn-outline", type: "button", onClick: () => openNewCourseModal(store, rerender) }, "+ 新建课程"),
+          h(
+            "button",
+            {
+              class: "btn btn-outline", type: "button",
+              onClick: () => openUploadAudioModal(store, null, (note) => {
+                view = { mode: "detail", noteId: note.id };
+                detailTab = "transcript";
+                rerender();
+              }),
+            },
+            "+ 上传录音文件生成笔记"
+          ),
           h(
             "button",
             {
               class: "btn btn-primary", type: "button",
               disabled: Boolean(recorder) || !browserOk || undefined,
-              onClick: () => openNewNoteModal(store, (note) => {
+              onClick: () => openNewNoteModal(store, null, (note) => {
                 view = { mode: "record", noteId: note.id };
                 rerender();
               }),
@@ -1644,12 +2288,70 @@
             "+ 新建课堂笔记"
           ),
         ]),
-        activeBanner,
+        renderActiveRecordingBanner(rerender),
         browserOk ? null : h("div", { class: "empty-hint" }, "当前浏览器不支持录音转文字，建议换用最新版 Chrome 或 Edge 桌面浏览器；已有的笔记不受影响，仍然可以查看。"),
-        missingKeyHints.length
-          ? h("div", { class: "empty-hint" }, `还没配置好 AI 相关功能：录音转文字不需要密钥；${missingKeyHints.join("；")}，去「数据与设置」填一下。`)
-          : null,
-        notes.length ? h("div", { class: "summary-grid" }, notes.map(renderNoteCard)) : h("div", { class: "empty-hint" }, "还没有课堂笔记，点右上角开始第一条录音吧"),
+        renderMissingKeyHints(store),
+        courses.length || uncategorizedCount
+          ? h("div", { class: "summary-grid" }, [...courses.map(courseCard), uncategorizedCard])
+          : h("div", { class: "empty-hint" }, "还没有课堂笔记，点右上角开始第一条录音吧（可以先建一个课程，把同一门课的多次课都归到一起）"),
+      ])
+    );
+  }
+
+  function renderCourseNotesView(container, store, ctx, rerender) {
+    const courseId = view.courseId || null;
+    const course = courseId ? store.listClassNoteCourses().find((c) => c.id === courseId) : null;
+    if (courseId && !course) {
+      // 课程已经不存在了（比如刚被删掉）：回到课程列表，不留一个指向不存在课程的死页面。
+      view = { mode: "list" };
+      rerender();
+      return;
+    }
+    const notes = store.listClassNotes(courseId);
+    const browserOk = checkBrowserSupport();
+
+    mount(
+      container,
+      h("div", { style: "display:flex;flex-direction:column;gap:14px;" }, [
+        h(
+          "button",
+          { class: "btn btn-ghost", type: "button", style: "align-self:flex-start;", onClick: () => { view = { mode: "list" }; rerender(); } },
+          "← 返回课程列表"
+        ),
+        h("div", { class: "section-row", style: "justify-content:space-between;align-items:center;gap:8px;" }, [
+          h("div", { class: "card-title", style: "font-size:16px;" }, course ? course.name : "未分类"),
+          h("div", { class: "grow" }),
+          h(
+            "button",
+            {
+              class: "btn btn-outline btn-sm", type: "button",
+              onClick: () => openUploadAudioModal(store, courseId, (note) => {
+                view = { mode: "detail", noteId: note.id };
+                detailTab = "transcript";
+                rerender();
+              }),
+            },
+            "+ 上传录音文件"
+          ),
+          h(
+            "button",
+            {
+              class: "btn btn-primary btn-sm", type: "button",
+              disabled: Boolean(recorder) || !browserOk || undefined,
+              onClick: () => openNewNoteModal(store, courseId, (note) => {
+                view = { mode: "record", noteId: note.id };
+                rerender();
+              }),
+            },
+            "+ 新建这门课的笔记"
+          ),
+        ]),
+        renderActiveRecordingBanner(rerender),
+        browserOk ? null : h("div", { class: "empty-hint" }, "当前浏览器不支持录音转文字，建议换用最新版 Chrome 或 Edge 桌面浏览器；已有的笔记不受影响，仍然可以查看。"),
+        renderMissingKeyHints(store),
+        notes.length
+          ? h("div", { class: "summary-grid" }, notes.map((note) => renderNoteCard(store, note, rerender)))
+          : h("div", { class: "empty-hint" }, "这里还没有笔记"),
       ])
     );
   }
@@ -1666,8 +2368,10 @@
       renderRecordView(container, store, ctx, rerender);
     } else if (view.mode === "detail") {
       renderDetailView(container, store, ctx, rerender);
+    } else if (view.mode === "courseNotes") {
+      renderCourseNotesView(container, store, ctx, rerender);
     } else {
-      renderListView(container, store, ctx, rerender);
+      renderCoursesOverview(container, store, ctx, rerender);
     }
   }
 

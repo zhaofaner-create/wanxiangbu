@@ -1378,6 +1378,16 @@ describe("课堂笔记：录音+转录+翻译+AI整理笔记的数据层", () =>
     assert.equal(note.audioKey, null);
     assert.deepEqual(note.materials, []);
     assert.equal(note.mindMap, null);
+    assert.equal(note.courseId, null); // 默认"未分类"
+    assert.equal(note.sourceType, "recorded"); // 默认是现场录音，不是上传的录音文件
+    assert.equal(note.retranscript, null);
+  });
+
+  test("新建笔记：可以直接指定所属课程，sourceType 传 uploaded 就是上传的录音", () => {
+    const course = store.addClassNoteCourse("宏观经济学");
+    const note = store.addClassNote({ title: "第3讲", courseId: course.id, sourceType: "uploaded" });
+    assert.equal(note.courseId, course.id);
+    assert.equal(note.sourceType, "uploaded");
   });
 
   test("追加转录分段：空文字不追加，正常文字追加后 updatedAt 会更新", async () => {
@@ -1543,6 +1553,12 @@ describe("课堂笔记：录音+转录+翻译+AI整理笔记的数据层", () =>
     // 不认识的 kind 一律当成 image 处理（防御性默认值，不会因为传参笔误就存出一条脏数据）。
     const fallback = store.addClassNoteMaterial(note.id, { name: "未知类型" });
     assert.equal(fallback.kind, "image");
+
+    // Word 文档跟 PPT 一样，只保留解析出来的文字，不保留文件本身。
+    const docx = store.addClassNoteMaterial(note.id, { kind: "docx", name: "讲义.docx", extractedText: "第一章 概述" });
+    assert.equal(docx.kind, "docx");
+    assert.equal(docx.extractedText, "第一章 概述");
+    assert.equal(docx.storageKey, null);
   });
 
   test("上传材料：按 id 删除，不影响其它材料", () => {
@@ -1585,6 +1601,42 @@ describe("课堂笔记：录音+转录+翻译+AI整理笔记的数据层", () =>
     assert.equal(list[0].title, "第二条");
   });
 
+  test("中途修改互译目标语言：整段替换，自动去重、去掉跟讲课语言重复的那个", () => {
+    const note = store.addClassNote({ title: "语言课", sourceLang: "fr" });
+    assert.deepEqual(note.targetLangs, []); // 一开始没选任何互译语言
+
+    const updated = store.setClassNoteTargetLangs(note.id, ["zh", "en", "zh", "fr"]);
+    assert.deepEqual(updated.targetLangs, ["zh", "en"]); // 去重 + 去掉跟讲课语言相同的 fr
+
+    store.setClassNoteTargetLangs(note.id, ["ja"]);
+    assert.deepEqual(store.findClassNote(note.id).targetLangs, ["ja"]); // 整段替换，不是追加
+  });
+
+  test("整体重新识别：保存结果、翻译，重新生成会清空上一次的翻译", () => {
+    const note = store.addClassNote({ title: "重新识别课" });
+    assert.equal(store.setClassNoteRetranscriptTranslation(note.id, "zh", [{ text: "你好" }]), null); // 还没生成过 retranscript
+
+    const updated = store.setClassNoteRetranscript(note.id, { provider: "google", segments: [{ text: "Bonjour à tous" }] });
+    assert.equal(updated.retranscript.provider, "google");
+    assert.equal(updated.retranscript.segments.length, 1);
+    assert.deepEqual(updated.retranscript.translations, {});
+    assert.ok(updated.retranscript.generatedAt);
+
+    store.setClassNoteRetranscriptTranslation(note.id, "zh", [{ text: "大家好" }]);
+    let found = store.findClassNote(note.id);
+    assert.deepEqual(found.retranscript.translations.zh, [{ text: "大家好" }]);
+
+    // 重新识别一次：旧的翻译结果被清空（内容已经变了，旧翻译对不上）。
+    store.setClassNoteRetranscript(note.id, { provider: "azure", segments: [{ text: "Bonjour" }] });
+    found = store.findClassNote(note.id);
+    assert.equal(found.retranscript.provider, "azure");
+    assert.deepEqual(found.retranscript.translations, {});
+
+    // 传 null 清空整个重新识别结果。
+    store.setClassNoteRetranscript(note.id, null);
+    assert.equal(store.findClassNote(note.id).retranscript, null);
+  });
+
   test("对不存在的笔记 id 操作，安全返回 null 而不是抛错", () => {
     assert.equal(store.appendClassNoteTranscript("no-such-id", { text: "x" }), null);
     assert.equal(store.finishClassNoteRecording("no-such-id", {}), null);
@@ -1600,6 +1652,9 @@ describe("课堂笔记：录音+转录+翻译+AI整理笔记的数据层", () =>
     assert.equal(store.addClassNoteMaterial("no-such-id", { kind: "image" }), null);
     assert.equal(store.removeClassNoteMaterial("no-such-id", "m1"), null);
     assert.equal(store.setClassNoteMindMap("no-such-id", { title: "x", children: [] }), null);
+    assert.equal(store.setClassNoteTargetLangs("no-such-id", ["zh"]), null);
+    assert.equal(store.setClassNoteCourseId("no-such-id", "c1"), null);
+    assert.equal(store.setClassNoteRetranscript("no-such-id", { segments: [] }), null);
   });
 
   test("老存档（没有 classNotes 字段）能正常兼容补上空数组", () => {
@@ -1616,5 +1671,58 @@ describe("课堂笔记：录音+转录+翻译+AI整理笔记的数据层", () =>
     assert.deepEqual(s.listClassNotes(), []);
     const note = s.addClassNote({ title: "新功能测试" });
     assert.ok(note.id);
+  });
+});
+
+describe("课堂笔记：课程分组", () => {
+  test("新建课程、改名、按课程筛选笔记列表", () => {
+    const course = store.addClassNoteCourse("  宏观经济学  ");
+    assert.equal(course.name, "宏观经济学"); // 自动去掉首尾空格
+
+    const n1 = store.addClassNote({ title: "第1讲", courseId: course.id });
+    const n2 = store.addClassNote({ title: "第2讲", courseId: course.id });
+    store.addClassNote({ title: "别的课" }); // 未分类
+
+    assert.deepEqual(store.listClassNotes(course.id).map((n) => n.id).sort(), [n1.id, n2.id].sort());
+    assert.equal(store.listClassNotes(null).length, 1); // 未分类只有"别的课"这一条
+    assert.equal(store.listClassNotes().length, 3); // 不传参数：老行为，返回全部
+
+    store.renameClassNoteCourse(course.id, "宏观经济学（下）");
+    assert.equal(store.listClassNoteCourses().find((c) => c.id === course.id).name, "宏观经济学（下）");
+
+    // 空字符串改名：保留原名，不会被清空成空课程名。
+    store.renameClassNoteCourse(course.id, "   ");
+    assert.equal(store.listClassNoteCourses().find((c) => c.id === course.id).name, "宏观经济学（下）");
+  });
+
+  test("笔记可以随时改归属课程", () => {
+    const courseA = store.addClassNoteCourse("A课");
+    const courseB = store.addClassNoteCourse("B课");
+    const note = store.addClassNote({ title: "笔记", courseId: courseA.id });
+    store.setClassNoteCourseId(note.id, courseB.id);
+    assert.equal(store.findClassNote(note.id).courseId, courseB.id);
+    store.setClassNoteCourseId(note.id, null);
+    assert.equal(store.findClassNote(note.id).courseId, null);
+  });
+
+  test("删除课程不会删掉笔记，笔记会归到「未分类」", () => {
+    const course = store.addClassNoteCourse("要删除的课");
+    const note = store.addClassNote({ title: "笔记", courseId: course.id });
+    store.removeClassNoteCourse(course.id);
+    assert.equal(store.listClassNoteCourses().some((c) => c.id === course.id), false);
+    assert.equal(store.findClassNote(note.id).courseId, null); // 笔记还在，只是没归属了
+  });
+
+  test("带统计的课程列表：笔记数量、最近更新时间，按最近更新倒序", async () => {
+    const courseA = store.addClassNoteCourse("A课");
+    const courseB = store.addClassNoteCourse("B课");
+    store.addClassNote({ title: "A课的笔记1", courseId: courseA.id });
+    await new Promise((r) => setTimeout(r, 5));
+    store.addClassNote({ title: "B课的笔记1", courseId: courseB.id });
+
+    const list = store.listClassNoteCoursesWithStats();
+    assert.equal(list.find((c) => c.id === courseA.id).noteCount, 1);
+    assert.equal(list.find((c) => c.id === courseB.id).noteCount, 1);
+    assert.equal(list[0].id, courseB.id); // B课更新更晚，排前面
   });
 });

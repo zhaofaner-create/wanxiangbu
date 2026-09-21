@@ -43,6 +43,7 @@
     warn: '<path d="M12 4 3 20h18L12 4Z"/><path d="M12 10.5v4M12 17h.01"/>',
     key: '<circle cx="8" cy="15" r="4"/><path d="M11 12 19 4M15 8l2.5 2.5M18 5l2.5 2.5"/>',
     globe: '<circle cx="12" cy="12" r="8"/><path d="M4 12h16M12 4c2.5 2.5 2.5 13 0 16M12 4c-2.5 2.5-2.5 13 0 16"/>',
+    mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6"/>',
   };
   const ICON_COLORS = {
     save: ["hsl(206, 88%, 74%)", "hsl(206, 78%, 58%)"],
@@ -51,6 +52,7 @@
     warn: ["hsl(8, 88%, 74%)", "hsl(355, 70%, 62%)"],
     key: ["hsl(150, 55%, 70%)", "hsl(150, 45%, 52%)"],
     globe: ["hsl(202, 80%, 74%)", "hsl(202, 62%, 54%)"],
+    mic: ["hsl(28, 88%, 74%)", "hsl(28, 70%, 56%)"],
   };
   // 生成备份文件名——不放在 render() 里面，是为了能被单元测试直接调用验证格式，
   // 不用真的跑一遍浏览器点击下载才能确认文件名对不对。
@@ -328,6 +330,63 @@
       ]),
     ]);
 
+    // "整体重新识别"用的云端语音转文字服务：只有 Google / Azure 两家（没有免费的浏览器
+    // 内置引擎能处理"已经录好的音频文件"，DeepL 也不做语音识别），跟上面「多语言互译
+    // 服务」是同一套写法——两家密钥分开填、分开存，"当前使用"选中哪家就调用哪家。
+    // Azure 这里要填的是专门的"语音"资源的密钥和区域，跟上面 Azure Translator 是两个
+    // 不同的资源，需要在 Azure 门户里单独新建。
+    const googleSpeechKeyInput = h("input", {
+      class: "field-input", type: "password", autocomplete: "off",
+      placeholder: settings.googleSpeechApiKey ? "已设置，留空并保存可清除" : "Google Cloud Speech-to-Text API 密钥",
+    });
+    function saveGoogleSpeechKey() {
+      store.setGoogleSpeechApiKey(googleSpeechKeyInput.value);
+      rerender();
+    }
+
+    const azureSpeechKeyInput = h("input", {
+      class: "field-input", type: "password", autocomplete: "off",
+      placeholder: settings.azureSpeechApiKey ? "已设置，留空并保存可清除" : "Azure AI Speech 密钥",
+    });
+    const azureSpeechRegionInput = h("input", {
+      class: "field-input", type: "text", autocomplete: "off", style: "max-width:140px;",
+      placeholder: settings.azureSpeechRegion || "资源区域，如 eastasia",
+      value: settings.azureSpeechRegion || "",
+    });
+    function saveAzureSpeechKey() {
+      store.setAzureSpeechApiKey(azureSpeechKeyInput.value);
+      store.setAzureSpeechRegion(azureSpeechRegionInput.value);
+      rerender();
+    }
+
+    const sttProviderLabels = { google: "Google Speech-to-Text", azure: "Azure AI Speech" };
+    const sttProvidersCard = h("div", { class: "card" }, [
+      cardHeading("mic", "语音转文字服务"),
+      h("div", { class: "settings-card-desc" },
+        "给「课堂笔记」模块的「整体重新识别」和「上传录音文件生成笔记」功能用，两家可以都填，下面选一个「当前使用」；这两个功能识别的是已经录好的音频文件，跟录音过程中实时显示的转录（浏览器自带、免费）是两套不同的技术，所以需要单独申请密钥。Azure 这里要填的是「语音」资源，跟上面翻译服务卡片里的 Azure Translator 资源不是同一个，需要单独新建。"),
+      h("div", { class: "field-label", style: "margin:4px 0 6px;" }, "当前使用"),
+      createSegmented({
+        kind: "tabs",
+        options: store.STT_PROVIDER_OPTIONS.map((p) => ({ key: p.code, label: p.label })),
+        activeKey: settings.sttProvider,
+        onSelect: (key) => { store.setSttProvider(key); rerender(); },
+      }).el,
+      h("div", { style: "display:flex;flex-direction:column;gap:14px;margin-top:14px;" }, [
+        h("div", { "data-provider": "google" }, [
+          h("div", { class: "field-label", style: "margin-bottom:6px;" }, sttProviderLabels.google),
+          providerKeyField({ statusOk: Boolean(settings.googleSpeechApiKey), inputs: [googleSpeechKeyInput], saveFn: saveGoogleSpeechKey }),
+        ]),
+        h("div", { "data-provider": "azure" }, [
+          h("div", { class: "field-label", style: "margin-bottom:6px;" }, sttProviderLabels.azure),
+          providerKeyField({
+            statusOk: Boolean(settings.azureSpeechApiKey && settings.azureSpeechRegion),
+            inputs: [azureSpeechKeyInput, azureSpeechRegionInput],
+            saveFn: saveAzureSpeechKey,
+          }),
+        ]),
+      ]),
+    ]);
+
     const dangerCard = h("div", { class: "card danger-card" }, [
       cardHeading("warn", "危险操作", true),
       h("div", { class: "settings-card-desc" }, "清空后所有模块的数据都将被删除，且无法恢复（除非你之前导出过备份）。"),
@@ -355,6 +414,7 @@
           appearanceCard,
           homeCardsCard,
           translationProvidersCard,
+          sttProvidersCard,
           translationCard,
         ]),
       ]),

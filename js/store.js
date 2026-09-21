@@ -106,6 +106,16 @@
         azureTranslatorApiKey: "",
         azureTranslatorRegion: "",
         deeplApiKey: "",
+        // "整体重新识别"功能用的云端语音转文字服务：跟互译一样是用户自己的密钥、自己付费，
+        // 但这里只支持 Google/Azure 两家（没有免费的浏览器内置引擎能处理"已经录好的音频文件"，
+        // 详见 speechToTextProviders.js 顶部注释）。语音识别用的密钥跟"多语言互译"的密钥分开存，
+        // 即使用户之前把翻译密钥限制成"只能调翻译API"，语音识别这边重新填一份专门开通了
+        // 语音转文字权限的密钥也不会互相干扰。Azure 语音资源和 Azure 翻译资源是两种不同的资源，
+        // 需要在 Azure 门户里单独新建，所以区域也分开存。
+        sttProvider: "google",
+        googleSpeechApiKey: "",
+        azureSpeechApiKey: "",
+        azureSpeechRegion: "",
       },
       // 读书笔记：一本书一条记录（书名/作者/状态/评分/起止日期），notes 是挂在某本书下面的
       // 一条条读书笔记/摘录（可选页码）。两个都是后加的顶层字段，不进 isValidDataShape 的 required。
@@ -117,6 +127,11 @@
       // 不适合塞进 localStorage 的 JSON 里，音频用 IndexedDB 单独存（见
       // js/components/speechRecorder.js），这里的每条笔记只存一个 audioKey 引用它。
       classNotes: [],
+      // 课堂笔记的"课程"分组：同一门课上很多次课，每次课是一条 classNotes 记录，
+      // classNoteCourses 是"课程"本身（{id, name, createdAt}），classNotes 上的 courseId
+      // 指向属于哪门课，没有归到任何课程的笔记 courseId 是 null（界面上归到"未分类"）。
+      // 这是后加的顶层字段，同样不进 isValidDataShape 的 required 列表。
+      classNoteCourses: [],
     };
   }
 
@@ -145,6 +160,11 @@
     { code: "google", label: "Google 翻译" },
     { code: "azure", label: "Azure Translator" },
     { code: "deepl", label: "DeepL" },
+  ];
+  // "整体重新识别"功能可选的语音转文字服务，只有两家（DeepL 不做语音转文字）。
+  const STT_PROVIDER_OPTIONS = [
+    { code: "google", label: "Google Speech-to-Text" },
+    { code: "azure", label: "Azure AI Speech" },
   ];
 
   /**
@@ -1270,13 +1290,19 @@
     }
 
     // ---------- 课堂笔记 ----------
-    /** 新建一条课堂笔记（录音开始时调用）。sourceLang 是讲课语言，targetLangs 是要互译成的语言列表。 */
-    function addClassNote({ title, sourceLang = "fr", targetLangs = [] } = {}) {
+    /** 新建一条课堂笔记（录音开始时调用，或者上传一份已有录音文件时调用）。
+     * sourceLang 是讲课语言，targetLangs 是要互译成的语言列表，courseId 是所属课程
+     * （不传/传 null 就是"未分类"，之后可以用 setClassNoteCourseId 随时改）。
+     * sourceType 区分这条笔记的音频是"现场录音"还是"上传的已有录音文件"——上传的笔记
+     * 没有"实时识别"这一步，直接走云端语音转文字服务把结果写进 transcriptSegments。 */
+    function addClassNote({ title, sourceLang = "fr", targetLangs = [], courseId = null, sourceType = "recorded" } = {}) {
       const note = {
         id: uuid(),
         title: title || "",
         sourceLang,
         targetLangs: Array.isArray(targetLangs) ? targetLangs.filter((l) => l !== sourceLang) : [],
+        courseId: courseId || null,
+        sourceType: sourceType === "uploaded" ? "uploaded" : "recorded",
         // 转录分段：[{ start, end, text }]，start/end 是相对录音开始的秒数。
         transcriptSegments: [],
         // 翻译结果按目标语言代码分开存：{ en: [{start,end,text}], zh: [...] }。
@@ -1306,6 +1332,12 @@
         // AI 根据笔记正文（和材料）生成的思维导图，结构是 {title, children:[...]} 的嵌套树，
         // 没生成过是 null。同样是后加字段，不进 isValidDataShape 的 required。
         mindMap: null,
+        // "整体重新识别"：对着已经存好的录音音频，调用云端语音转文字服务重新识别一遍
+        // （用来对付实时识别漏内容的问题），跟 transcriptSegments（实时识别/上传笔记的
+        // 主转录）是两份独立的数据，界面上可以切换对比。没生成过是 null。
+        // 结构：{ provider: "google"|"azure", segments: [{text}], translations: {lang:[{text}]}, generatedAt }。
+        // 同样是后加字段，不进 isValidDataShape 的 required。
+        retranscript: null,
         status: "recording", // recording | recorded | notes_ready
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
@@ -1451,14 +1483,15 @@
       return note;
     }
 
-    /** 给这条笔记添加一份上传的材料（图片或解析好的 PPT 文本）。material 需要带 kind，
+    /** 给这条笔记添加一份上传的材料（图片、解析好的 PPT 或 Word 文本）。material 需要带 kind，
      * id 由这里自动生成（跟录音的音频、笔记本身用同一个 uuid()）。返回新增的这条 material。 */
     function addClassNoteMaterial(id, material) {
       const note = findClassNote(id);
       if (!note) return null;
+      const kind = material && ["pptx", "docx"].includes(material.kind) ? material.kind : "image";
       const item = {
         id: uuid(),
-        kind: material && material.kind === "pptx" ? "pptx" : "image",
+        kind,
         name: (material && material.name) || "",
         addedAt: new Date().toISOString(),
         storageKey: (material && material.storageKey) || null,
@@ -1491,6 +1524,64 @@
       return note;
     }
 
+    /** 修改互译目标语言列表（整段替换）：录音开始时没选语言、或者中途想再加一种语言，
+     * 都通过这个函数改；改完之后调用方（classNotes.js）负责把新加的语言对已有转录内容
+     * 做一次补翻译——这里只管更新"要翻成哪些语言"这个列表本身。 */
+    function setClassNoteTargetLangs(id, targetLangs) {
+      const note = findClassNote(id);
+      if (!note) return null;
+      const list = Array.isArray(targetLangs) ? targetLangs.filter((l) => l && l !== note.sourceLang) : [];
+      note.targetLangs = [...new Set(list)];
+      touchClassNote(note);
+      persist();
+      return note;
+    }
+
+    /** 把这条笔记归到某个课程下（courseId 传 null 就是移回"未分类"）。 */
+    function setClassNoteCourseId(id, courseId) {
+      const note = findClassNote(id);
+      if (!note) return null;
+      note.courseId = courseId || null;
+      touchClassNote(note);
+      persist();
+      return note;
+    }
+
+    /**
+     * 保存"整体重新识别"的结果（整段替换，重新识别一次会覆盖上一次的结果）。
+     * 传 null/非对象会清空这份重新识别结果，回到"还没重新识别过"的状态。
+     * translations 每次都从空对象开始——重新识别出来的转录内容变了，之前对着旧内容
+     * 翻译的结果不能继续用，需要重新翻译（由调用方决定要不要马上重新翻）。
+     */
+    function setClassNoteRetranscript(id, retranscript) {
+      const note = findClassNote(id);
+      if (!note) return null;
+      if (retranscript && typeof retranscript === "object") {
+        note.retranscript = {
+          provider: retranscript.provider || "",
+          segments: Array.isArray(retranscript.segments) ? retranscript.segments : [],
+          translations: {},
+          generatedAt: new Date().toISOString(),
+        };
+      } else {
+        note.retranscript = null;
+      }
+      touchClassNote(note);
+      persist();
+      return note;
+    }
+
+    /** 保存"重新识别"版本翻译成某个目标语言的结果（整段替换）；还没生成过重新识别结果时
+     * 安全地什么都不做（没有 retranscript 容器可以挂翻译）。 */
+    function setClassNoteRetranscriptTranslation(id, lang, segments) {
+      const note = findClassNote(id);
+      if (!note || !note.retranscript) return null;
+      note.retranscript.translations = { ...(note.retranscript.translations || {}), [lang]: Array.isArray(segments) ? segments : [] };
+      touchClassNote(note);
+      persist();
+      return note;
+    }
+
     function renameClassNote(id, title) {
       const note = findClassNote(id);
       if (!note) return null;
@@ -1507,9 +1598,50 @@
 
     /** 最新的在前面。用数组插入顺序倒转而不是按 createdAt 时间戳排序——两条笔记如果
      * 在同一毫秒内连续创建（比如自动化测试里），时间戳会完全相同，排序结果就不可靠了；
-     * 数组本身的插入顺序才是绝对可靠的先后关系（同样的写法见 listBookNotes）。 */
-    function listClassNotes() {
-      return [...state.classNotes].reverse();
+     * 数组本身的插入顺序才是绝对可靠的先后关系（同样的写法见 listBookNotes）。
+     * courseId 不传：返回所有笔记（老行为，不受"课程"分组功能影响）；传具体值
+     * （包括 null，代表"未分类"）：只返回归到这个课程下的笔记。 */
+    function listClassNotes(courseId) {
+      const all = [...state.classNotes].reverse();
+      if (courseId === undefined) return all;
+      return all.filter((n) => (n.courseId || null) === courseId);
+    }
+
+    // ---------- 课堂笔记：课程分组 ----------
+    function addClassNoteCourse(name) {
+      const c = { id: uuid(), name: (name || "").trim() || "未命名课程", createdAt: new Date().toISOString() };
+      state.classNoteCourses.push(c);
+      persist();
+      return c;
+    }
+    function renameClassNoteCourse(id, name) {
+      const c = state.classNoteCourses.find((x) => x.id === id);
+      if (!c) return null;
+      const trimmed = (name || "").trim();
+      if (trimmed) c.name = trimmed;
+      persist();
+      return { ...c };
+    }
+    /** 删除课程不会删掉这门课下面的笔记，只是把它们的 courseId 清空（归到"未分类"），
+     * 跟"删除记账账户不删记录、删库存物品保留消耗历史"是同一套不丢数据的原则。 */
+    function removeClassNoteCourse(id) {
+      state.classNoteCourses = state.classNoteCourses.filter((c) => c.id !== id);
+      state.classNotes.forEach((n) => { if (n.courseId === id) n.courseId = null; });
+      persist();
+    }
+    function listClassNoteCourses() {
+      return [...state.classNoteCourses];
+    }
+    /** 课程列表页要展示每门课有几次课堂笔记、最近一次更新是什么时候，这里一次算好，
+     * 按最近更新时间倒序排列（跟"最近用到的排前面"这个全站习惯一致）。 */
+    function listClassNoteCoursesWithStats() {
+      return state.classNoteCourses
+        .map((c) => {
+          const notes = state.classNotes.filter((n) => n.courseId === c.id);
+          const lastUpdatedAt = notes.reduce((max, n) => (n.updatedAt > max ? n.updatedAt : max), "");
+          return { ...c, noteCount: notes.length, lastUpdatedAt: lastUpdatedAt || null };
+        })
+        .sort((a, b) => (b.lastUpdatedAt || "").localeCompare(a.lastUpdatedAt || ""));
     }
 
     // ---------- 设置 ----------
@@ -1570,6 +1702,24 @@
     }
     function setDeeplApiKey(key) {
       state.settings.deeplApiKey = typeof key === "string" ? key.trim() : "";
+      persist();
+    }
+    /** "整体重新识别"用哪家语音转文字服务：google/azure 二选一，非法值直接忽略。 */
+    function setSttProvider(provider) {
+      if (!STT_PROVIDER_OPTIONS.some((p) => p.code === provider)) return;
+      state.settings.sttProvider = provider;
+      persist();
+    }
+    function setGoogleSpeechApiKey(key) {
+      state.settings.googleSpeechApiKey = typeof key === "string" ? key.trim() : "";
+      persist();
+    }
+    function setAzureSpeechApiKey(key) {
+      state.settings.azureSpeechApiKey = typeof key === "string" ? key.trim() : "";
+      persist();
+    }
+    function setAzureSpeechRegion(region) {
+      state.settings.azureSpeechRegion = typeof region === "string" ? region.trim() : "";
       persist();
     }
     /** 更新个人资料（昵称/头像），patch 里只传要改的字段就行，另一个字段保持不变。 */
@@ -1645,13 +1795,16 @@
       setClassNoteTranslation, appendClassNoteTranslation, setClassNoteMarkdown, setClassNoteNotesTranslation,
       setClassNoteFlashcards, setClassNoteQuiz, setClassNoteQuizAnswer, addClassNoteQaMessage,
       addClassNoteMaterial, removeClassNoteMaterial, setClassNoteMindMap,
+      setClassNoteTargetLangs, setClassNoteCourseId, setClassNoteRetranscript, setClassNoteRetranscriptTranslation,
+      addClassNoteCourse, renameClassNoteCourse, removeClassNoteCourse, listClassNoteCourses, listClassNoteCoursesWithStats,
       renameClassNote, removeClassNote, listClassNotes,
       getSettings, updateHomeCardVisibility, setLastBackupAt, manualSave,
       setFontScale, setTheme, toggleTheme, updateProfile,
       setClaudeApiKey, setTranslationProvider,
       setGoogleTranslateApiKey, setAzureTranslatorApiKey, setAzureTranslatorRegion, setDeeplApiKey,
+      setSttProvider, setGoogleSpeechApiKey, setAzureSpeechApiKey, setAzureSpeechRegion,
       FONT_SCALES, THEMES, AVATAR_OPTIONS, BOOK_STATUSES, CLASS_NOTE_LANGUAGES,
-      TRANSLATION_PROVIDER_OPTIONS,
+      TRANSLATION_PROVIDER_OPTIONS, STT_PROVIDER_OPTIONS,
       exportBackup, importBackup, resetAll,
     };
   }
@@ -1669,6 +1822,6 @@
   return {
     STORAGE_KEY, SCHEMA_VERSION, createStore, store,
     FONT_SCALES, THEMES, AVATAR_OPTIONS, APP_NAME, BOOK_STATUSES, CLASS_NOTE_LANGUAGES,
-    TRANSLATION_PROVIDER_OPTIONS,
+    TRANSLATION_PROVIDER_OPTIONS, STT_PROVIDER_OPTIONS,
   };
 });

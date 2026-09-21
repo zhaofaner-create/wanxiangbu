@@ -70,6 +70,25 @@ const FAKE_BROWSER_APIS_SCRIPT = `
     get() { return { getUserMedia: async () => fakeStream }; },
   });
 
+  // "整体重新识别"要用到 AudioContext.decodeAudioData() 把录音 Blob 解码成 PCM，
+  // 测试环境里的"录音"只是 FakeMediaRecorder 编出来的几个假字节（"fake-audio"），
+  // 真的 AudioContext 解不出来，所以这里也一并假掉：不管喂给它什么，都直接返回一份
+  // 固定的、很短的单声道假音频数据，只测"识别流程走通了没有"，不测真实解码。
+  class FakeAudioContext {
+    decodeAudioData() {
+      return Promise.resolve({
+        numberOfChannels: 1,
+        sampleRate: 16000,
+        getChannelData: () => new Float32Array(16000).fill(0.05),
+      });
+    }
+    close() {
+      return Promise.resolve();
+    }
+  }
+  window.AudioContext = FakeAudioContext;
+  window.webkitAudioContext = FakeAudioContext;
+
   window.__emitTranscript = (text, isFinal) => {
     const rec = window.__fakeRecognitions[window.__fakeRecognitions.length - 1];
     if (!rec || !rec.onresult) return;
@@ -179,6 +198,37 @@ async function setTranslationProvider(page, provider, { apiKey, region } = {}) {
   await row.locator("button", { hasText: "保存" }).click();
 }
 
+/** 在「数据与设置」的「语音转文字服务」卡片里，切到某一家并填好它要求的字段——
+ * 跟 setTranslationProvider 是同一套写法，用于"整体重新识别"相关测试。 */
+async function setSttProvider(page, provider, { apiKey, region } = {}) {
+  await goToModule(page, "数据与设置");
+  const providerLabels = { google: "Google Speech-to-Text", azure: "Azure AI Speech" };
+  const card = page.locator(".card", { hasText: "语音转文字服务" });
+  await card.locator(".tab-btn", { hasText: providerLabels[provider] }).click();
+  const row = card.locator(`[data-provider="${provider}"]`);
+  if (apiKey !== undefined) await row.locator("input[type=password]").fill(apiKey);
+  if (region !== undefined) await row.locator("input[type=text]").fill(region);
+  await row.locator("button", { hasText: "保存" }).click();
+}
+
+/** 拦截 Google/Azure 语音识别接口，跟 mockTranslateApi 是同一个道理：每次识别请求
+ * 都回同一段固定文字，模拟"整段音频不管切成几段，全部识别成功"。 */
+async function mockSttApi(page, provider, transcript) {
+  if (provider === "google") {
+    await page.route("https://speech.googleapis.com/v1/speech:recognize**", (route) =>
+      fulfillWithCors(route, { results: [{ alternatives: [{ transcript }] }] })
+    );
+    return;
+  }
+  if (provider === "azure") {
+    await page.route(/^https:\/\/[^/]+\.stt\.speech\.microsoft\.com\//, (route) =>
+      fulfillWithCors(route, { RecognitionStatus: "Success", DisplayText: transcript })
+    );
+    return;
+  }
+  throw new Error("不认识的 provider: " + provider);
+}
+
 /** 拦截 Claude API，跟 mockClaudeApi 一样，但把每次真正发出的请求体记到 captured.body 里，
  * 用来验证"生成笔记时材料有没有被正确塞进提示词/图片内容块"这类需要检查请求内容的场景。 */
 async function mockClaudeApiCapturing(page, replyText, captured) {
@@ -219,6 +269,43 @@ function buildFakePptx(slidesText) {
       "utf-8"
     ),
   }));
+
+  const localParts = [];
+  const centralParts = [];
+  let offset = 0;
+  files.forEach((f) => {
+    const nameBuf = Buffer.from(f.name, "utf-8");
+    const localHeader = Buffer.concat([
+      u32(0x04034b50), u16(20), u16(0), u16(0), u16(0), u16(0),
+      u32(0), u32(f.data.length), u32(f.data.length),
+      u16(nameBuf.length), u16(0), nameBuf,
+    ]);
+    localParts.push(localHeader, f.data);
+    centralParts.push(Buffer.concat([
+      u32(0x02014b50), u16(20), u16(20), u16(0), u16(0), u16(0), u16(0),
+      u32(0), u32(f.data.length), u32(f.data.length),
+      u16(nameBuf.length), u16(0), u16(0), u16(0), u16(0), u32(0),
+      u32(offset), nameBuf,
+    ]));
+    offset += localHeader.length + f.data.length;
+  });
+  const localBuf = Buffer.concat(localParts);
+  const centralBuf = Buffer.concat(centralParts);
+  const eocd = Buffer.concat([
+    u32(0x06054b50), u16(0), u16(0), u16(files.length), u16(files.length),
+    u32(centralBuf.length), u32(localBuf.length), u16(0),
+  ]);
+  return Buffer.concat([localBuf, centralBuf, eocd]);
+}
+
+// 跟 buildFakePptx 是同一套最简单的"不压缩"ZIP 打包逻辑，只是换成 .docx 只有唯一一个
+// word/document.xml 文件、内容按 <w:p>/<w:t> 段落包裹，用来测 Word 文档材料上传。
+function buildFakeDocx(paragraphs) {
+  const xml =
+    `<?xml version="1.0"?><w:document xmlns:w="w"><w:body>` +
+    paragraphs.map((text) => `<w:p><w:r><w:t>${text}</w:t></w:r></w:p>`).join("") +
+    `</w:body></w:document>`;
+  const files = [{ name: "word/document.xml", data: Buffer.from(xml, "utf-8") }];
 
   const localParts = [];
   const centralParts = [];
@@ -342,7 +429,12 @@ describe("课堂笔记：录音转文字", () => {
   test("没有设置 AI 密钥时，没有转录内容也无法生成笔记/翻译", async () => {
     await startNewRecording(page, { title: "没有密钥的笔记" });
     await page.locator("button", { hasText: "结束录音" }).click();
-    await assert.doesNotReject(page.locator(".empty-hint", { hasText: "还没有转录内容" }).waitFor());
+    // 现场没识别到任何内容，但录音文件还在——这正是"整体重新识别"要救回来的场景
+    // （见需求 #4），所以转录 tab 不应该是死路一条的"还没有转录内容"，而是给出
+    // "整体重新识别"的入口（这里因为还没配置语音识别服务的 key，按钮是禁用的）。
+    await assert.doesNotReject(page.locator(".card", { hasText: "整体重新识别" }).waitFor());
+    await assert.doesNotReject(page.locator(".content-area", { hasText: "还没配置当前使用的语音识别服务" }).first().waitFor());
+    assert.equal(await page.locator("button", { hasText: "开始整体重新识别" }).isDisabled(), true);
 
     await page.locator(".tabs .tab-btn", { hasText: "笔记" }).click();
     await assert.doesNotReject(page.locator(".content-area", { hasText: "还没设置 AI 服务密钥" }).first().waitFor());
@@ -700,6 +792,44 @@ describe("课堂笔记：多语言互译（转录 tab 里原文+译文合并显�
     assert.equal(await page.locator(".segment-translation").count(), 0);
     assert.equal(await page.locator("button", { hasText: "翻译" }).count(), 0);
   });
+
+  test("创建时没选互译语言，录音过程中可以随时补上——之前已经转录的内容会一起补翻", async () => {
+    await setTranslationProvider(page, "google", { apiKey: "google-test-key" });
+    await startNewRecording(page, { title: "中途加语言测试" });
+    await page.evaluate(() => window.__emitTranscript("Bonjour à tous", true));
+    await assert.doesNotReject(page.locator(".record-transcript-list", { hasText: "Bonjour à tous" }).waitFor());
+
+    // 还没选互译语言时，录音页"实时转录"卡片上的按钮显示"+ 互译语言"。
+    await page.locator("button", { hasText: "+ 互译语言" }).click();
+    await page.locator(".modal-box .toggle-row", { hasText: "中文" }).locator("input").check();
+    await page.locator(".modal-box button", { hasText: "保存" }).click();
+    // 保存后按钮应该变成"编辑互译语言"，说明语言已经生效。
+    await assert.doesNotReject(page.locator("button", { hasText: "编辑互译语言" }).waitFor());
+
+    await mockTranslateApi(page, "google", "大家好");
+    await page.locator("button", { hasText: "结束录音" }).click();
+
+    // 中途才选的语言，之前（选语言之前）已经转录的那句话也应该被一起补翻，不会漏掉。
+    await assert.doesNotReject(page.locator(".content-area", { hasText: "Bonjour à tous" }).waitFor());
+    await assert.doesNotReject(page.locator(".content-area .segment-translation", { hasText: "大家好" }).waitFor());
+  });
+
+  test("笔记详情页（录音已结束）里也能随时补上/修改互译语言", async () => {
+    await setTranslationProvider(page, "google", { apiKey: "google-test-key" });
+    await startNewRecording(page, { title: "详情页加语言测试" });
+    await page.evaluate(() => window.__emitTranscript("Guten Tag", true));
+    await page.locator("button", { hasText: "结束录音" }).click();
+    await assert.doesNotReject(page.locator(".content-area", { hasText: "Guten Tag" }).waitFor());
+    assert.equal(await page.locator("button", { hasText: "翻译" }).count(), 0);
+
+    await page.locator("button", { hasText: "编辑互译语言" }).click();
+    await page.locator(".modal-box .toggle-row", { hasText: "英语" }).locator("input").check();
+    await page.locator(".modal-box button", { hasText: "保存" }).click();
+
+    await mockTranslateApi(page, "google", "Good day");
+    await page.locator("button", { hasText: "翻译成英语" }).click();
+    await assert.doesNotReject(page.locator(".content-area .segment-translation", { hasText: "Good day" }).waitFor());
+  });
 });
 
 // 这是给"上课用"这个场景设计的核心功能：老师讲课的三小时里，用户不应该需要一直手动点
@@ -735,6 +865,218 @@ describe("课堂笔记：录音过程中自动实时翻译（不需要手动点�
 
     await page.locator("button", { hasText: "结束录音" }).click();
     await assert.doesNotReject(page.locator(".tabs", { hasText: "转录" }).waitFor());
+  });
+});
+
+describe("课堂笔记：整体重新识别（录音结束后用云端语音识别服务重新整段识别一遍）", () => {
+  test("没有配置语音识别密钥时，「重新识别」栏显示提示、按钮禁用", async () => {
+    await startNewRecording(page, { title: "还没配置识别服务的课" });
+    await page.evaluate(() => window.__emitTranscript("实时识别的内容", true));
+    await page.locator("button", { hasText: "结束录音" }).click();
+
+    await page.locator(".tabs .tab-btn", { hasText: "转录" }).click();
+    await page.locator(".content-area .pill-group .pill", { hasText: "重新识别" }).click();
+    await assert.doesNotReject(page.locator(".content-area", { hasText: "还没配置当前使用的语音识别服务" }).waitFor());
+    await assert.equal(await page.locator("button", { hasText: "开始整体重新识别" }).isDisabled(), true);
+  });
+
+  test("配置好 Google 语音识别密钥后，能生成重新识别结果，并且能跟实时识别切换对比", async () => {
+    await mockSttApi(page, "google", "整体重新识别出来的完整内容。");
+    await setSttProvider(page, "google", { apiKey: "fake-google-speech-key" });
+
+    await startNewRecording(page, { title: "重新识别课" });
+    await page.evaluate(() => window.__emitTranscript("实时识别的内容", true));
+    await page.locator("button", { hasText: "结束录音" }).click();
+
+    await page.locator(".tabs .tab-btn", { hasText: "转录" }).click();
+    await assert.doesNotReject(page.locator(".content-area", { hasText: "实时识别的内容" }).waitFor());
+
+    await page.locator(".content-area .pill-group .pill", { hasText: "重新识别" }).click();
+    await page.locator("button", { hasText: "开始整体重新识别" }).click();
+    await assert.doesNotReject(
+      page.locator(".content-area", { hasText: "整体重新识别出来的完整内容。" }).waitFor({ timeout: 10000 })
+    );
+
+    // 切回"实时识别"，原来那份内容还在、没有被覆盖掉。
+    await page.locator(".content-area .pill-group .pill", { hasText: "实时识别" }).click();
+    await assert.doesNotReject(page.locator(".content-area", { hasText: "实时识别的内容" }).waitFor());
+    assert.equal(await page.locator(".content-area", { hasText: "整体重新识别出来的完整内容。" }).count(), 0);
+
+    // 再切回"重新识别"，结果还保留着，不需要重新生成。
+    await page.locator(".content-area .pill-group .pill", { hasText: "重新识别" }).click();
+    await assert.doesNotReject(page.locator(".content-area", { hasText: "整体重新识别出来的完整内容。" }).waitFor());
+    await assert.doesNotReject(page.locator("button", { hasText: "重新生成" }).waitFor());
+  });
+
+  test("识别服务返回错误时，显示错误提示，按钮恢复可点，不会污染已有内容", async () => {
+    await page.route("https://speech.googleapis.com/v1/speech:recognize**", async (route) => {
+      if (route.request().method() === "OPTIONS") {
+        await route.fulfill({
+          status: 204,
+          headers: {
+            "access-control-allow-origin": "*",
+            "access-control-allow-methods": "POST, OPTIONS",
+            "access-control-allow-headers": "content-type",
+          },
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 403,
+        contentType: "application/json",
+        headers: { "access-control-allow-origin": "*" },
+        body: JSON.stringify({ error: { message: "密钥无效" } }),
+      });
+    });
+    await setSttProvider(page, "google", { apiKey: "bad-key" });
+
+    await startNewRecording(page, { title: "识别失败的课" });
+    await page.evaluate(() => window.__emitTranscript("实时识别的内容", true));
+    await page.locator("button", { hasText: "结束录音" }).click();
+
+    await page.locator(".tabs .tab-btn", { hasText: "转录" }).click();
+    await page.locator(".content-area .pill-group .pill", { hasText: "重新识别" }).click();
+    await page.locator("button", { hasText: "开始整体重新识别" }).click();
+
+    await assert.doesNotReject(page.locator(".content-area", { hasText: "密钥无效" }).waitFor());
+    await assert.equal(await page.locator("button", { hasText: "开始整体重新识别" }).isDisabled(), false);
+  });
+
+  test("重新识别出的内容也能翻译成目标语言，用的是同一套多语言互译服务", async () => {
+    await mockSttApi(page, "google", "Bonjour à tous.");
+    await setSttProvider(page, "google", { apiKey: "fake-google-speech-key" });
+    await setTranslationProvider(page, "google", { apiKey: "fake-translate-key" });
+    await mockTranslateApi(page, "google", "大家好。");
+
+    await startNewRecording(page, { title: "重新识别+翻译课", targetLangLabel: "中文" });
+    await page.evaluate(() => window.__emitTranscript("实时识别内容", true));
+    await page.locator("button", { hasText: "结束录音" }).click();
+
+    await page.locator(".tabs .tab-btn", { hasText: "转录" }).click();
+    await page.locator(".content-area .pill-group .pill", { hasText: "重新识别" }).click();
+    await page.locator("button", { hasText: "开始整体重新识别" }).click();
+    await assert.doesNotReject(page.locator(".content-area", { hasText: "Bonjour à tous." }).waitFor({ timeout: 10000 }));
+
+    await page.locator(".content-area button", { hasText: "翻译成中文" }).click();
+    await assert.doesNotReject(page.locator(".content-area", { hasText: "大家好。" }).waitFor());
+  });
+});
+
+// 新功能：上传一份已经在别的地方录好的音频文件（比如手机备忘录、会议/讲座录音），
+// 不走"现场录音+实时识别"这条路，直接生成一条笔记、之后靠"整体重新识别"（复用同一套
+// 云端语音识别服务）转出文字——这条笔记天生没有"实时识别"内容，转录 tab 应该直接停在
+// "重新识别"栏，不应该出现一个空的"实时识别"可切换。
+describe("课堂笔记：上传录音文件生成笔记（不现场录音，走整体识别流程）", () => {
+  test("上传录音文件后直接进入详情页的转录 tab，只有「重新识别」一栏，没有「实时识别」", async () => {
+    await goToModule(page, "课堂笔记");
+    await page.locator("button", { hasText: "+ 上传录音文件生成笔记" }).click();
+    await page.locator(".modal-box input[type=text]").fill("会议录音");
+    await page.locator(".modal-box input[type=file]").setInputFiles({
+      name: "meeting.mp3", mimeType: "audio/mpeg", buffer: Buffer.from("fake-audio-bytes"),
+    });
+    await page.locator(".modal-box button", { hasText: "生成笔记" }).click();
+
+    // 应该直接落在这条笔记的详情页，转录 tab 是当前激活的 tab。
+    await assert.doesNotReject(page.locator(".card-title", { hasText: "会议录音" }).waitFor());
+    await assert.doesNotReject(page.locator(".tabs .tab-btn.active", { hasText: "转录" }).waitFor());
+    // 没有"实时识别"/"重新识别"这个切换胶囊——因为压根没有实时识别内容可切。
+    assert.equal(await page.locator(".content-area .pill-group .pill", { hasText: "实时识别" }).count(), 0);
+    await assert.doesNotReject(page.locator("button", { hasText: "开始整体重新识别" }).waitFor());
+  });
+
+  test("配置好语音识别密钥后，可以在详情页里把上传的录音识别成文字", async () => {
+    await mockSttApi(page, "google", "这是一段上传的录音识别出来的内容。");
+    await setSttProvider(page, "google", { apiKey: "fake-google-speech-key" });
+
+    await goToModule(page, "课堂笔记");
+    await page.locator("button", { hasText: "+ 上传录音文件生成笔记" }).click();
+    await page.locator(".modal-box input[type=text]").fill("讲座录音");
+    await page.locator(".modal-box input[type=file]").setInputFiles({
+      name: "lecture.m4a", mimeType: "audio/mp4", buffer: Buffer.from("fake-audio-bytes"),
+    });
+    await page.locator(".modal-box button", { hasText: "生成笔记" }).click();
+
+    await page.locator("button", { hasText: "开始整体重新识别" }).click();
+    await assert.doesNotReject(
+      page.locator(".content-area", { hasText: "这是一段上传的录音识别出来的内容。" }).waitFor({ timeout: 10000 })
+    );
+  });
+
+  test("课程笔记列表里，上传生成的笔记带有区分标记，且能正常归到指定课程", async () => {
+    await goToModule(page, "课堂笔记");
+    await page.locator("button", { hasText: "+ 新建课程" }).click();
+    await page.locator(".modal-box input[name=name]").fill("外部录音归档");
+    await page.locator(".modal-box button[type=submit]").click();
+    await page.locator(".card", { hasText: "外部录音归档" }).click();
+
+    await page.locator("button", { hasText: "+ 上传录音文件" }).click();
+    await page.locator(".modal-box input[type=text]").fill("归档录音");
+    await page.locator(".modal-box input[type=file]").setInputFiles({
+      name: "archive.wav", mimeType: "audio/wav", buffer: Buffer.from("fake-audio-bytes"),
+    });
+    await page.locator(".modal-box button", { hasText: "生成笔记" }).click();
+
+    await page.locator("button", { hasText: "← 返回列表" }).click();
+    await assert.doesNotReject(page.locator(".card-title", { hasText: "外部录音归档" }).waitFor());
+    await assert.doesNotReject(page.locator(".card", { hasText: "📤" }).filter({ hasText: "归档录音" }).waitFor());
+  });
+});
+
+describe("课堂笔记：课程分组（同一门课的多次课归到一起）", () => {
+  test("新建课程、把笔记归到课程里、课程改名、笔记之间可以互相移动、删除课程后笔记变成未分类", async () => {
+    await goToModule(page, "课堂笔记");
+
+    // 新建一门课，直接从这门课的笔记列表里建第一条笔记（course 会被自动带上）。
+    await page.locator("button", { hasText: "+ 新建课程" }).click();
+    await page.locator(".modal-box input[name=name]").fill("宏观经济学");
+    await page.locator(".modal-box button[type=submit]").click();
+    await assert.doesNotReject(page.locator(".card", { hasText: "宏观经济学" }).waitFor());
+    assert.match(await page.locator(".card", { hasText: "宏观经济学" }).innerText(), /0 次课/);
+
+    await page.locator(".card", { hasText: "宏观经济学" }).click();
+    await assert.doesNotReject(page.locator(".card-title", { hasText: "宏观经济学" }).waitFor());
+    await page.locator("button", { hasText: "+ 新建这门课的笔记" }).click();
+    await page.locator(".modal-box input[type=text]").fill("第1讲：供需曲线");
+    await page.locator(".modal-box button", { hasText: "开始录音" }).click();
+    await page.locator("button", { hasText: "结束录音" }).click();
+
+    // 结束录音后"← 返回列表"应该回到这门课的笔记列表（而不是顶层课程总览），能看到刚建的笔记。
+    await page.locator("button", { hasText: "← 返回列表" }).click();
+    await assert.doesNotReject(page.locator(".card-title", { hasText: "宏观经济学" }).waitFor());
+    await assert.doesNotReject(page.locator(".card", { hasText: "第1讲：供需曲线" }).waitFor());
+
+    // 课程改名：回顶层课程总览，改名后次数统计应该跟着课程走。
+    await page.locator("button", { hasText: "← 返回课程列表" }).click();
+    await assert.doesNotReject(page.locator(".card", { hasText: "宏观经济学" }).waitFor());
+    assert.match(await page.locator(".card", { hasText: "宏观经济学" }).innerText(), /1 次课/);
+    await page.locator(".card", { hasText: "宏观经济学" }).locator("button", { hasText: "改名" }).click();
+    await page.locator(".modal-box input[name=name]").fill("宏观经济学（2026秋）");
+    await page.locator(".modal-box button[type=submit]").click();
+    await assert.doesNotReject(page.locator(".card", { hasText: "宏观经济学（2026秋）" }).waitFor());
+
+    // 再建一条不属于任何课程的笔记（未分类），然后把它移动到刚才这门课里。
+    await page.locator("button", { hasText: "+ 新建课堂笔记" }).click();
+    await page.locator(".modal-box input[type=text]").fill("散装笔记");
+    await page.locator(".modal-box button", { hasText: "开始录音" }).click();
+    await page.locator("button", { hasText: "结束录音" }).click();
+    await page.locator("button", { hasText: "移动到其它课程" }).click();
+    await page.locator(".modal-box select[name=courseId]").selectOption({ label: "宏观经济学（2026秋）" });
+    await page.locator(".modal-box button[type=submit]").click();
+
+    await page.locator("button", { hasText: "← 返回列表" }).click();
+    await assert.doesNotReject(page.locator(".card-title", { hasText: "宏观经济学（2026秋）" }).waitFor());
+    await assert.doesNotReject(page.locator(".card", { hasText: "散装笔记" }).waitFor());
+    assert.equal(await page.locator(".card", { hasText: "第1讲：供需曲线" }).count(), 1);
+
+    // 删除这门课：课程消失，但两条笔记都应该变成"未分类"而不是被一起删掉。
+    await page.locator("button", { hasText: "← 返回课程列表" }).click();
+    await page.locator(".card", { hasText: "宏观经济学（2026秋）" }).locator(".row-delete").click();
+    await page.locator(".modal-box button", { hasText: "删除" }).click();
+    assert.equal(await page.locator(".card", { hasText: "宏观经济学（2026秋）" }).count(), 0);
+
+    await page.locator(".card", { hasText: "未分类" }).click();
+    await assert.doesNotReject(page.locator(".card", { hasText: "第1讲：供需曲线" }).waitFor());
+    await assert.doesNotReject(page.locator(".card", { hasText: "散装笔记" }).waitFor());
   });
 });
 
@@ -834,6 +1176,32 @@ describe("课堂笔记：课件材料上传（PPT + 拍照笔记）", () => {
       buffer: Buffer.from("这根本不是一个 ZIP 文件"),
     });
     await assert.doesNotReject(materialsCard.locator("text=解析 PPT「坏文件.pptx」失败").waitFor());
+  });
+
+  test("除了 PPT 和照片，也可以上传 Word (.docx) 文档作为课件材料", async () => {
+    await startNewRecording(page, { title: "Word文档测试" });
+    await page.locator("button", { hasText: "结束录音" }).click();
+
+    const materialsCard = page.locator(".card", { hasText: "课件材料" });
+    await materialsCard.locator('input[type="file"][accept^=".docx"]').setInputFiles({
+      name: "讲义.docx",
+      mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      buffer: buildFakeDocx(["第一段讲义内容", "第二段讲义内容"]),
+    });
+    await assert.doesNotReject(materialsCard.locator("text=讲义.docx").waitFor());
+  });
+
+  test("解析不出内容的 Word 文档会提示失败，不影响已有材料", async () => {
+    await startNewRecording(page, { title: "Word解析失败测试" });
+    await page.locator("button", { hasText: "结束录音" }).click();
+
+    const materialsCard = page.locator(".card", { hasText: "课件材料" });
+    await materialsCard.locator('input[type="file"][accept^=".docx"]').setInputFiles({
+      name: "坏文件.docx",
+      mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      buffer: Buffer.from("这根本不是一个 ZIP 文件"),
+    });
+    await assert.doesNotReject(materialsCard.locator("text=解析 Word 文档「坏文件.docx」失败").waitFor());
   });
 
   test("生成笔记时会把材料一并发给 AI：PPT 文字进提示词、照片作为图片内容块", async () => {
