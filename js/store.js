@@ -132,6 +132,13 @@
       // 指向属于哪门课，没有归到任何课程的笔记 courseId 是 null（界面上归到"未分类"）。
       // 这是后加的顶层字段，同样不进 isValidDataShape 的 required 列表。
       classNoteCourses: [],
+      // 演讲提词：准备好一份演讲稿/提示词，上台演讲时全屏大字提词、跟着语音自动或
+      // 手动翻到下一句。每条记录：{id, title, mode:"script"|"prompts", lang（演讲用的
+      // 语言，决定语音识别用哪个语言标签，复用课堂笔记的 CLASS_NOTE_LANGUAGES 列表），
+      // sentences:[纯文本字符串数组]（"script"=完整逐字稿，按句拆好；"prompts"=简短
+      // 提示词条目，一行一条），createdAt, updatedAt}。这是本轮新加的顶层字段，同样
+      // 不进 isValidDataShape 的 required 列表（同样的兼容性硬规则）。
+      speechPrompters: [],
     };
   }
 
@@ -1644,6 +1651,47 @@
         .sort((a, b) => (b.lastUpdatedAt || "").localeCompare(a.lastUpdatedAt || ""));
     }
 
+    // ---------- 演讲提词 ----------
+    /** 新建一份演讲提词稿。sentences 是已经拆好句/按行拆好的纯文本数组，交给调用方
+     * （speechPrompter.js 的编辑器）负责拆分逻辑，这里只管存。 */
+    function addSpeechPrompter({ title, mode = "script", lang = "zh", sentences = [] } = {}) {
+      const item = {
+        id: uuid(),
+        title: (title || "").trim() || "未命名演讲",
+        mode: mode === "prompts" ? "prompts" : "script",
+        lang: lang || "zh",
+        sentences: Array.isArray(sentences) ? sentences.map((s) => String(s || "")) : [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      state.speechPrompters.push(item);
+      persist();
+      return item;
+    }
+    function findSpeechPrompter(id) {
+      return state.speechPrompters.find((p) => p.id === id) || null;
+    }
+    /** 整段替换标题/模式/语言/句子列表——编辑器每次"保存"都是整体保存，不做增量 patch。 */
+    function updateSpeechPrompter(id, { title, mode, lang, sentences } = {}) {
+      const item = findSpeechPrompter(id);
+      if (!item) return null;
+      if (title !== undefined) item.title = (title || "").trim() || "未命名演讲";
+      if (mode !== undefined) item.mode = mode === "prompts" ? "prompts" : "script";
+      if (lang !== undefined) item.lang = lang || "zh";
+      if (sentences !== undefined) item.sentences = Array.isArray(sentences) ? sentences.map((s) => String(s || "")) : [];
+      item.updatedAt = new Date().toISOString();
+      persist();
+      return { ...item };
+    }
+    function removeSpeechPrompter(id) {
+      state.speechPrompters = state.speechPrompters.filter((p) => p.id !== id);
+      persist();
+    }
+    /** 按最近更新时间倒序，跟全站"最近用到的排前面"习惯一致（同 listClassNoteCoursesWithStats）。 */
+    function listSpeechPrompters() {
+      return [...state.speechPrompters].sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""));
+    }
+
     // ---------- 设置 ----------
     function getSettings() {
       return {
@@ -1798,6 +1846,7 @@
       setClassNoteTargetLangs, setClassNoteCourseId, setClassNoteRetranscript, setClassNoteRetranscriptTranslation,
       addClassNoteCourse, renameClassNoteCourse, removeClassNoteCourse, listClassNoteCourses, listClassNoteCoursesWithStats,
       renameClassNote, removeClassNote, listClassNotes,
+      addSpeechPrompter, findSpeechPrompter, updateSpeechPrompter, removeSpeechPrompter, listSpeechPrompters,
       getSettings, updateHomeCardVisibility, setLastBackupAt, manualSave,
       setFontScale, setTheme, toggleTheme, updateProfile,
       setClaudeApiKey, setTranslationProvider,

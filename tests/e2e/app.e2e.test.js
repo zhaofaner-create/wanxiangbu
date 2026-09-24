@@ -31,12 +31,12 @@ afterEach(async () => {
 });
 
 describe("整体框架", () => {
-  test("加载后默认停在首页，导航栏有12个模块入口，且没有任何登录界面（PRD验收标准2：免登录）", async () => {
+  test("加载后默认停在首页，导航栏有13个模块入口，且没有任何登录界面（PRD验收标准2：免登录）", async () => {
     await assert.doesNotReject(page.waitForSelector(".topbar-title"));
     const title = await page.locator("#topbar-title").innerText();
     assert.equal(title, "首页总览");
     const navCount = await page.locator(".nav-item").count();
-    assert.equal(navCount, 12); // 9个原有模块 + 读书笔记 + 课堂笔记 + 个人信息
+    assert.equal(navCount, 13); // 9个原有模块 + 读书笔记 + 课堂笔记 + 演讲提词 + 个人信息
     assert.equal(await page.locator('input[type=password]').count(), 0);
     assert.equal(await page.locator("text=登录").count(), 0);
   });
@@ -54,7 +54,7 @@ describe("整体框架", () => {
 
     const expected = {
       "日常": ["首页总览", "今日计划"],
-      "学习": ["学习任务", "提醒事项", "课堂笔记"],
+      "学习": ["学习任务", "提醒事项", "课堂笔记", "演讲提词"],
       "生活": ["饮食计划", "库存管理", "个人记账", "游戏娱乐", "读书笔记"],
       "系统": ["个人信息", "数据与设置"],
     };
@@ -689,6 +689,14 @@ describe("游戏娱乐：评分/评论 + 游玩数据统计图表（开发计划
   });
 
   test("记一次游玩后，「游玩时长趋势」图表和「游玩排行」都会更新", async () => {
+    // 图表只画"最近7天"，之前这里写死了一个具体日期去记游玩时长，时间一往前走、
+    // 那天不再落在"最近7天"窗口里，断言就会跟着失败（跟下面"三个标签"测试注释
+    // 里说的日期漂移是同一类问题）。这里同样把浏览器的"现在"锁死，游玩记录就记
+    // 在锁死的这一天本身，稳稳落在7天窗口内，不会再随日历推移而失败。
+    await page.clock.setFixedTime(new Date("2026-09-16T09:00:00"));
+    await page.reload();
+    await page.waitForSelector(".nav-item");
+
     await goToModule(page, "游戏娱乐");
     await page.locator("button", { hasText: "+ 添加游戏" }).click();
     await fillModal(page, { name: "星露谷物语", status: "在玩" });
