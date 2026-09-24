@@ -61,12 +61,27 @@
     return typeof window !== "undefined" && Boolean(window.SpeechRecognition || window.webkitSpeechRecognition);
   }
 
-  /** 完整稿：按中文/英文常见的句末标点拆句，标点保留在前一句末尾。 */
+  /** 完整稿：按中文/英文/法文等常见的句末标点拆句，标点保留在前一句末尾。
+   * 之前这里漏了西文最常用的句号"."（只认了中文的"。"），导致整段英文/法文稿子
+   * 因为一个句号都匹配不上，完全拆不开、全部粘成一句——这是用户实际用英文稿子
+   * 试出来的真实 bug，这里补上"."。另外先按换行拆一遍（用户粘贴的稿子本来就经常
+   * 是一行一句），再对每一行内部按标点拆，这样"整段没有换行的英文稿子"和"每句
+   * 都换行的稿子"两种粘贴习惯都能拆对；换行本身不会被误当成一句丢失内容。
+   * 缩写词（如"Mr."）偶尔会被误拆成两句，这跟中文标点拆句一样是简单规则的固有
+   * 局限，用编辑器里已有的"↑合并"按钮手动合并回去即可。 */
   function splitScriptText(raw) {
-    return String(raw || "")
-      .split(/(?<=[。！？!?])/)
-      .map((s) => s.trim())
-      .filter(Boolean);
+    const lines = String(raw || "").split(/\r?\n/);
+    const sentences = [];
+    for (const line of lines) {
+      const trimmedLine = line.trim();
+      if (!trimmedLine) continue;
+      const parts = trimmedLine.split(/(?<=[。！？.!?])\s*/);
+      for (const part of parts) {
+        const s = part.trim();
+        if (s) sentences.push(s);
+      }
+    }
+    return sentences;
   }
 
   /** 提示词：一行当一条，不做标点拆分（提示词本来就是短语，不是完整句子）。 */

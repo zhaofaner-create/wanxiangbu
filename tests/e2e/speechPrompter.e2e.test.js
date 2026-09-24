@@ -109,6 +109,31 @@ describe("演讲提词：新建/编辑/删除", () => {
     assert.match(meta, /共 3 句/);
   });
 
+  test("新建完整稿：英文稿子（用「.」结尾，每句单独一行）也能正确按标点拆句（回归测试——之前拆句规则漏掉了英文句号「.」，导致整段英文稿子完全拆不开，全部粘成一句）", async () => {
+    const text =
+      "Hello everyone.\n" +
+      "Now, I'm going to present the second question: Biocoop's stakeholders.\n" +
+      "To understand Biocoop, we first need to remember one important thing:\n" +
+      "Biocoop is a cooperative.\n" +
+      "This means that some stakeholders are also members of the cooperative, called sociétaires, and they participate directly in the governance.";
+    await createScriptPrompter(page, { title: "英文演讲稿", text });
+    const card = page.locator(".card", { hasText: "英文演讲稿" });
+    await assert.doesNotReject(card.waitFor());
+    const meta = await card.locator(".muted").innerText();
+    assert.match(meta, /共 5 句/);
+
+    await card.locator("button", { hasText: "编辑" }).click();
+    await assert.equal(await page.locator(".prompter-row").count(), 5);
+    const values = await page.$$eval(".prompter-row input", (els) => els.map((el) => el.value));
+    assert.deepEqual(values, [
+      "Hello everyone.",
+      "Now, I'm going to present the second question: Biocoop's stakeholders.",
+      "To understand Biocoop, we first need to remember one important thing:",
+      "Biocoop is a cooperative.",
+      "This means that some stakeholders are also members of the cooperative, called sociétaires, and they participate directly in the governance.",
+    ]);
+  });
+
   test("新建提示词：按每行拆分（不按标点，不要求逐字念出来）", async () => {
     await createPromptsPrompter(page, { title: "答辩提要", text: "预算问题\n时间安排\n下一步计划" });
     const card = page.locator(".card", { hasText: "答辩提要" });
